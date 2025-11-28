@@ -15,17 +15,19 @@ public class Store implements Serializable {
     private LocalTime timeWindowStart;
     private LocalTime timeWindowEnd;
     private String name;
+    private String address;
 
     public Store() {
     }
 
-    public Store(String storeId, double x, double y, LocalTime start, LocalTime end) {
+    public Store(String storeId, String name, String address, double x, double y, LocalTime start, LocalTime end) {
         this.storeId = storeId;
+        this.name = name != null && !name.isBlank() ? name : "Store_" + storeId;
+        this.address = address != null && !address.isBlank() ? address : "Адрес не указан";
         this.x = x;
         this.y = y;
         this.timeWindowStart = start;
         this.timeWindowEnd = end;
-        this.name = "Store_" + storeId;
     }
 
     public String getStoreId() {
@@ -76,6 +78,14 @@ public class Store implements Serializable {
         this.name = name;
     }
 
+    public String getAddress() {
+        return address;
+    }
+
+    public void setAddress(String address) {
+        this.address = address;
+    }
+
     /**
      * Проверяет, находится ли время в пределах временного окна магазина
      */
@@ -92,6 +102,8 @@ public class Store implements Serializable {
     public String toString() {
         return "Store{" +
                 "storeId='" + storeId + '\'' +
+                ", name='" + name + '\'' +
+                ", address='" + address + '\'' +
                 ", x=" + x +
                 ", y=" + y +
                 ", timeWindow=" + timeWindowStart + "-" + timeWindowEnd +
