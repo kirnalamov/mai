@@ -49,22 +49,19 @@ public class ScheduleWriter {
 
         // Заголовки
         String[] headers = {
-            "Маршрут",
-            "Автомобиль",
-            "Тип ТС",
-            "Водитель",
-            "Грузоподъёмность, т",
-            "Магазин",
-            "Адрес",
-            "Окно приёмки",
-            "Товар",
-            "Количество, шт",
-            "Вес партии, т",
-            "Дистанция до точки, км",
-            "Прибытие",
-            "Отправление",
-            "Пробег маршрута, км",
-            "Стоимость маршрута, ₽"
+                "Маршрут",
+                "Грузовик",
+                "Магазин",
+                "Коорд. X",
+                "Коорд. Y",
+                "Товар",
+                "Количество, шт",
+                "Вес партии, т",
+                "Дистанция от предыдущей точки, км",
+                "Прибытие",
+                "Отправление",
+                "Пробег маршрута, км",
+                "Стоимость маршрута, ₽"
         };
 
         Row headerRow = sheet.createRow(0);
@@ -83,17 +80,18 @@ public class ScheduleWriter {
 
                     int col = 0;
                     row.createCell(col++).setCellValue(route.getRouteId());
-                    row.createCell(col++).setCellValue(route.getTruckName());
-                    row.createCell(col++).setCellValue(route.getVehicleType());
-                    row.createCell(col++).setCellValue(route.getDriverName());
-                    Cell capacityCell = row.createCell(col++);
-                    capacityCell.setCellValue(route.getTruckCapacity());
-                    capacityCell.setCellStyle(numberStyle);
+                    row.createCell(col++).setCellValue(route.getTruckId());
+                    row.createCell(col++).setCellValue(stop.getStoreId());
 
-                    row.createCell(col++).setCellValue(stop.getStoreName());
-                    row.createCell(col++).setCellValue(stop.getAddress());
-                    row.createCell(col++).setCellValue(stop.getTimeWindow());
-                    row.createCell(col++).setCellValue(item.getProductName());
+                    Cell coordXCell = row.createCell(col++);
+                    coordXCell.setCellValue(stop.getX());
+                    coordXCell.setCellStyle(numberStyle);
+
+                    Cell coordYCell = row.createCell(col++);
+                    coordYCell.setCellValue(stop.getY());
+                    coordYCell.setCellStyle(numberStyle);
+
+                    row.createCell(col++).setCellValue(item.getProductId());
 
                     Cell quantityCell = row.createCell(col++);
                     quantityCell.setCellValue(item.getQuantity());
@@ -197,35 +195,30 @@ public class ScheduleWriter {
 
     public static void writeScheduleToCSV(String filename, List<DeliveryRoute> routes) throws IOException {
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
-            writer.println("route_id,truck_name,vehicle_type,driver_name,truck_capacity_t,store_name,address,time_window,product_name,quantity,weight_t,distance_to_store_km,arrival_time,departure_time,route_distance_km,route_cost_rub");
+            writer.println("route_id,truck_id,store_id,store_x,store_y,product_id,quantity,weight_t,distance_from_prev_km,arrival_time,departure_time,route_distance_km,route_cost_rub");
 
-            // Данные
             for (DeliveryRoute route : routes) {
                 for (DeliveryRoute.RouteStop stop : route.getStops()) {
                     for (DeliveryRoute.DeliveryItem item : stop.getItems()) {
-                        writer.printf("\"%s\",\"%s\",\"%s\",\"%s\",%.2f,\"%s\",\"%s\",\"%s\",\"%s\",%d,%.2f,%.2f,%s,%s,%.2f,%.2f%n",
-                            route.getRouteId(),
-                            escape(route.getTruckName()),
-                            escape(route.getVehicleType()),
-                            escape(route.getDriverName()),
-                            route.getTruckCapacity(),
-                            escape(stop.getStoreName()),
-                            escape(stop.getAddress()),
-                            escape(stop.getTimeWindow()),
-                            escape(item.getProductName()),
-                            item.getQuantity(),
-                            item.getWeight(),
-                            stop.getDistanceFromPreviousStop(),
-                            stop.getArrivalTime(),
-                            stop.getDepartureTime(),
-                            route.getTotalDistance(),
-                            route.getTotalCost()
+                        writer.printf("\"%s\",\"%s\",\"%s\",%.2f,%.2f,\"%s\",%d,%.2f,%.2f,\"%s\",\"%s\",%.2f,%.2f%n",
+                                route.getRouteId(),
+                                escape(route.getTruckId()),
+                                escape(stop.getStoreId()),
+                                stop.getX(),
+                                stop.getY(),
+                                escape(item.getProductId()),
+                                item.getQuantity(),
+                                item.getWeight(),
+                                stop.getDistanceFromPreviousStop(),
+                                stop.getArrivalTime() != null ? stop.getArrivalTime().toString() : "-",
+                                stop.getDepartureTime() != null ? stop.getDepartureTime().toString() : "-",
+                                route.getTotalDistance(),
+                                route.getTotalCost()
                         );
                     }
                 }
             }
 
-            // Сводка
             writer.println();
             writer.println("# ИТОГИ");
 

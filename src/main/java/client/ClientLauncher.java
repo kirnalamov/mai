@@ -26,7 +26,8 @@ public class ClientLauncher {
 
     public static void main(String[] args) {
         // Поддержка запуска без аргументов для локального тестирования
-        String serverHost = "26.59.86.171";
+        // String serverHost = "26.59.86.171";
+        String serverHost = "localhost";
         int serverPort = 1099;  // Порт по умолчанию
         String clientName = "ClientContainer";
         
@@ -104,7 +105,7 @@ public class ClientLauncher {
 
             System.out.println("\n=== Клиент готов к работе ===");
             System.out.println("Подключено к серверу: " + serverHost + ":" + serverPort);
-            System.out.println("Магазины отправляют запросы координатору...\n");
+            System.out.println("Магазины самостоятельно договариваются с грузовиками о доставке...\n");
 
             // Ждем завершения работы всех магазинов
             waitForCompletion(remoteContainer, storeCount);
@@ -138,7 +139,7 @@ public class ClientLauncher {
     private static void waitForCompletion(AgentContainer container, int expectedStores) {
         try {
             // Ждем достаточно времени для выполнения всех задач
-            // (магазины отправляют запросы, координатор планирует, грузовики выполняют)
+            // (магазины ведут переговоры с грузовиками, грузовики выполняют доставки)
             Thread.sleep(30000); // 30 секунд должно хватить
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

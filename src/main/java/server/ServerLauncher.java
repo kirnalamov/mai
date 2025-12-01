@@ -5,7 +5,6 @@ import jade.core.ProfileImpl;
 import jade.core.Runtime;
 import jade.wrapper.AgentContainer;
 import jade.wrapper.AgentController;
-import jade.wrapper.AgentState;
 import agents.*;
 import model.*;
 import io.DataLoader;
@@ -61,16 +60,8 @@ public class ServerLauncher {
             System.out.println("  - Магазинов: " + stores.size());
             System.out.println("  - Грузовиков: " + trucks.size());
 
-            // Создаем и запускаем Coordinator Agent
+            // Создаем и запускаем агентов (все равноправные, без централизованного координатора)
             System.out.println("\nСоздание агентов...");
-            AgentController coordinatorController = mainContainer.createNewAgent(
-                "coordinator",
-                "agents.CoordinatorAgent",
-                null
-            );
-            coordinatorController.start();
-            System.out.println("✓ CoordinatorAgent запущен");
-
             // Создаем и запускаем Warehouse Agent
             AgentController warehouseController = mainContainer.createNewAgent(
                 "warehouse",
@@ -79,6 +70,15 @@ public class ServerLauncher {
             );
             warehouseController.start();
             System.out.println("✓ WarehouseAgent запущен");
+
+            // Создаем и запускаем пассивный логгер расписания
+            AgentController loggerController = mainContainer.createNewAgent(
+                "logger",
+                "agents.ScheduleLoggerAgent",
+                null
+            );
+            loggerController.start();
+            System.out.println("✓ ScheduleLoggerAgent запущен");
 
             // СЕРВЕР создает ВСЕ грузовики (магазины будут на клиенте)
             System.out.println("\nСоздание грузовиков на сервере...");
@@ -97,21 +97,16 @@ public class ServerLauncher {
             }
             
             System.out.println("\n[SERVER] Создано агентов:");
-            System.out.println("  - Координатор: 1");
             System.out.println("  - Склад: 1");
+            System.out.println("  - Логгер расписания: 1");
             System.out.println("  - Грузовиков: " + truckCount);
             System.out.println("  - Магазинов: 0 (будут созданы на клиенте)");
 
             System.out.println("\n=== Сервер готов к работе ===");
             System.out.println("Для подключения клиентов используйте адрес: localhost:" + port);
-            System.out.println("Ожидание подключения клиента и выполнения задач...\n");
+            System.out.println("Ожидание подключения клиента и взаимодействия агентов...\n");
 
-            // Ждем завершения работы координатора
-            waitForCompletion(coordinatorController);
-            
-            System.out.println("\n=== Сервер завершает работу ===");
-            mainContainer.kill();
-            System.exit(0);
+            // Сервер продолжает работать, пока не будет остановлен пользователем или платформой
 
         } catch (Exception e) {
             System.err.println("Ошибка при запуске сервера: " + e.getMessage());
@@ -139,24 +134,5 @@ public class ServerLauncher {
 
     private static List<Truck> loadTrucks() throws IOException {
         return DataLoader.loadTrucks("data/trucks.csv");
-    }
-    
-    /**
-     * Ожидание завершения работы координатора
-     */
-    private static void waitForCompletion(AgentController coordinatorController) {
-        try {
-            // Ждем пока координатор не завершит работу
-            while (true) {
-                Thread.sleep(2000);
-                // Проверяем статус координатора
-                jade.wrapper.State state = coordinatorController.getState();
-                if (state != null && state.getCode() == AgentState.cAGENT_STATE_DELETED) {
-                    break;
-                }
-            }
-        } catch (Exception e) {
-            // Игнорируем ошибки
-        }
     }
 }

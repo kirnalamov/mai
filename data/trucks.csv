@@ -1,9 +1,9 @@
-truck_id,truck_name,vehicle_type,driver_name,capacity,cost_per_km,start_x,start_y
-TRUCK_001,"Газель «Север 1»","ГАЗель NEXT","Иван Петров",50.0,10.5,0.0,0.0
-TRUCK_002,"Газель «Север 2»","ГАЗель NEXT","Сергей Ким",60.0,12.0,0.0,0.0
-TRUCK_003,"MAN TGL 8.180","MAN TGL","Андрей Ильин",45.0,9.8,0.0,0.0
-TRUCK_004,"КАМАЗ 4308","КАМАЗ","Дмитрий Орлов",70.0,14.5,0.0,0.0
-TRUCK_005,"Isuzu NQR","Isuzu NQR","Олег Гринь",55.0,11.0,0.0,0.0
-TRUCK_006,"Hyundai HD78","Hyundai HD","Павел Волков",65.0,13.0,0.0,0.0
-TRUCK_007,"Mercedes Atego","Mercedes Atego","Николай Рубцов",48.0,10.0,0.0,0.0
-TRUCK_008,"Scania P230","Scania P","Антон Савельев",75.0,15.0,0.0,0.0
+truck_id,capacity,cost_per_km,start_x,start_y
+TRUCK_001,50.0,10.5,0.0,0.0
+TRUCK_002,60.0,12.0,0.0,0.0
+TRUCK_003,45.0,9.8,0.0,0.0
+TRUCK_004,70.0,14.5,0.0,0.0
+TRUCK_005,55.0,11.0,0.0,0.0
+TRUCK_006,65.0,13.0,0.0,0.0
+TRUCK_007,48.0,10.0,0.0,0.0
+TRUCK_008,75.0,15.0,0.0,0.0

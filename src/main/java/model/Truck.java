@@ -14,19 +14,12 @@ public class Truck implements Serializable {
     private double currentLoad;        // текущая загруженность
     private double startX;             // координата склада X
     private double startY;             // координата склада Y
-    private String displayName;
-    private String vehicleType;
-    private String driverName;
 
     public Truck() {
     }
 
-    public Truck(String truckId, String displayName, String vehicleType, String driverName,
-                 double capacity, double costPerKm, double startX, double startY) {
+    public Truck(String truckId, double capacity, double costPerKm, double startX, double startY) {
         this.truckId = truckId;
-        this.displayName = displayName != null && !displayName.isBlank() ? displayName : truckId;
-        this.vehicleType = vehicleType != null && !vehicleType.isBlank() ? vehicleType : "Транспорт";
-        this.driverName = driverName != null && !driverName.isBlank() ? driverName : "Экипаж не назначен";
         this.capacity = capacity;
         this.costPerKm = costPerKm;
         this.currentLoad = 0;
@@ -82,30 +75,6 @@ public class Truck implements Serializable {
         this.startY = startY;
     }
 
-    public String getDisplayName() {
-        return displayName != null && !displayName.isBlank() ? displayName : truckId;
-    }
-
-    public void setDisplayName(String displayName) {
-        this.displayName = displayName;
-    }
-
-    public String getVehicleType() {
-        return vehicleType != null && !vehicleType.isBlank() ? vehicleType : "Транспортное средство";
-    }
-
-    public void setVehicleType(String vehicleType) {
-        this.vehicleType = vehicleType;
-    }
-
-    public String getDriverName() {
-        return driverName != null && !driverName.isBlank() ? driverName : "Экипаж не назначен";
-    }
-
-    public void setDriverName(String driverName) {
-        this.driverName = driverName;
-    }
-
     /**
      * Проверяет, достаточно ли свободного места для груза
      */
@@ -137,9 +106,6 @@ public class Truck implements Serializable {
     public String toString() {
         return "Truck{" +
                 "truckId='" + truckId + '\'' +
-                ", name='" + getDisplayName() + '\'' +
-                ", vehicleType='" + getVehicleType() + '\'' +
-                ", driver='" + getDriverName() + '\'' +
                 ", capacity=" + capacity +
                 ", costPerKm=" + costPerKm +
                 ", currentLoad=" + currentLoad +

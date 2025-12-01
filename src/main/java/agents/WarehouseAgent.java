@@ -1,7 +1,6 @@
 package agents;
 
 import jade.core.Agent;
-import jade.core.AID;
 import jade.core.behaviours.Behaviour;
 import jade.lang.acl.ACLMessage;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
@@ -17,7 +16,6 @@ import java.util.*;
 public class WarehouseAgent extends Agent {
     private Map<String, Integer> inventory;  // product_id -> quantity
     private List<Truck> trucks;
-    private AID coordinatorAID;
 
     @Override
     protected void setup() {
@@ -142,7 +140,4 @@ public class WarehouseAgent extends Agent {
         this.trucks = trucks;
     }
 
-    public void setCoordinatorAID(AID coordinatorAID) {
-        this.coordinatorAID = coordinatorAID;
-    }
 }

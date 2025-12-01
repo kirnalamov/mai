@@ -4,6 +4,7 @@ import jade.core.Agent;
 import jade.core.AID;
 import jade.core.behaviours.Behaviour;
 import jade.lang.acl.ACLMessage;
+import jade.lang.acl.MessageTemplate;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
 import jade.domain.FIPAAgentManagement.ServiceDescription;
 import model.Truck;
@@ -11,12 +12,10 @@ import java.time.LocalTime;
 
 /**
  * Агент грузовика
- * Выполняет маршрут доставки товаров
+ * Самостоятельно принимает решения о приеме заказов от магазинов и выполняет доставки
  */
 public class TruckAgent extends Agent {
     private Truck truck;
-    private AID coordinatorAID;
-    private String assignedRoute;
 
     @Override
     protected void setup() {
@@ -44,33 +43,8 @@ public class TruckAgent extends Agent {
             fe.printStackTrace();
         }
 
-        // Ищем координатора
-        findCoordinator();
-        
+        // Поведение грузовика: принимает CFP от магазинов и договаривается о доставке
         addBehaviour(new TruckServiceBehaviour());
-    }
-    
-    /**
-     * Поиск координатора через Directory Facilitator
-     */
-    private void findCoordinator() {
-        DFAgentDescription template = new DFAgentDescription();
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("service");
-        sd.setName("coordinator");
-        template.addServices(sd);
-        
-        try {
-            DFAgentDescription[] result = jade.domain.DFService.search(this, template);
-            if (result.length > 0) {
-                coordinatorAID = result[0].getName();
-                System.out.println("[" + getLocalName() + "] Найден координатор: " + coordinatorAID.getName());
-            } else {
-                System.out.println("[" + getLocalName() + "] Координатор не найден, будет поиск позже");
-            }
-        } catch (jade.domain.FIPAException fe) {
-            fe.printStackTrace();
-        }
     }
 
     @Override
@@ -87,53 +61,79 @@ public class TruckAgent extends Agent {
      * Поведение грузовика
      */
     private class TruckServiceBehaviour extends Behaviour {
-        private boolean routeAssigned = false;
-        private boolean routeExecuting = false;
-        private int stopIndex = 0;
+        private boolean busy = false;
 
         @Override
         public void action() {
-            ACLMessage msg = receive();
+            MessageTemplate mt = MessageTemplate.or(
+                    MessageTemplate.MatchPerformative(ACLMessage.CFP),
+                    MessageTemplate.or(
+                            MessageTemplate.MatchPerformative(ACLMessage.ACCEPT_PROPOSAL),
+                            MessageTemplate.MatchPerformative(ACLMessage.REJECT_PROPOSAL)
+                    )
+            );
+            ACLMessage msg = receive(mt);
             if (msg != null) {
                 System.out.println("[" + getLocalName() + "] Получено сообщение: " + msg.getContent());
 
-                if (msg.getPerformative() == ACLMessage.INFORM) {
-                    if (msg.getContent().startsWith("ROUTE:")) {
-                        handleRouteAssignment(msg);
-                    }
+                if (msg.getPerformative() == ACLMessage.CFP) {
+                    handleCFP(msg);
+                } else if (msg.getPerformative() == ACLMessage.ACCEPT_PROPOSAL) {
+                    handleAccept(msg);
+                } else if (msg.getPerformative() == ACLMessage.REJECT_PROPOSAL) {
+                    handleReject(msg);
                 }
             } else {
-                if (routeAssigned && !routeExecuting) {
-                    // Начинаем выполнение маршрута
-                    executeRoute();
-                } else {
-                    block();
-                }
+                block();
             }
         }
 
-        private void handleRouteAssignment(ACLMessage msg) {
+        /**
+         * Обработка CFP от магазина: грузовик сам решает, может ли взять заказ.
+         */
+        private void handleCFP(ACLMessage msg) {
             String content = msg.getContent();
             String[] parts = content.split(":");
-            if (parts.length >= 2) {
-                assignedRoute = parts[1];
-                routeAssigned = true;
-                System.out.println("[" + getLocalName() + "] ← Получен маршрут от координатора: " + assignedRoute);
-                if (parts.length >= 3) {
-                    System.out.println("[" + getLocalName() + "]   Количество остановок: " + parts[2].replace("stops=", ""));
-                }
+            if (parts.length >= 4 && "DELIVERY_CFP".equals(parts[0])) {
+                String storeId = parts[1];
+                String productId = parts[2];
+                int qty = Integer.parseInt(parts[3]);
 
-                ACLMessage reply = msg.createReply();
-                reply.setPerformative(ACLMessage.AGREE);
-                reply.setContent("ROUTE_ACCEPTED:" + assignedRoute);
-                send(reply);
-                System.out.println("[" + getLocalName() + "] → Отправлено подтверждение координатору");
+                // Простое решение: если грузовик сейчас не занят и есть место – предлагает услугу
+                double weight = qty * 1.0; // условный вес 1 единица = 1
+                if (!busy && truck.hasCapacity(weight)) {
+                    ACLMessage reply = msg.createReply();
+                    reply.setPerformative(ACLMessage.PROPOSE);
+                    // В предложении можно кодировать оценку стоимости
+                    double estimatedCost = truck.getCostPerKm() * 10; // упрощенная оценка
+                    reply.setContent("OFFER:" + storeId + ":" + productId + ":" + qty + ":cost=" + estimatedCost);
+                    send(reply);
+                    System.out.println("[" + getLocalName() + "] → Отправлено предложение магазину " + storeId);
+                } else {
+                    ACLMessage reply = msg.createReply();
+                    reply.setPerformative(ACLMessage.REFUSE);
+                    reply.setContent("BUSY_OR_NO_CAPACITY");
+                    send(reply);
+                    System.out.println("[" + getLocalName() + "] → Отказ: нет возможности взять заказ");
+                }
             }
         }
 
-        private void executeRoute() {
-            routeExecuting = true;
-            System.out.println("\n[" + getLocalName() + "] === Начинаю выполнение маршрута: " + assignedRoute + " ===");
+        /**
+         * Магазин принял наше предложение – выполняем доставку.
+         */
+        private void handleAccept(ACLMessage msg) {
+            String content = msg.getContent();
+            String[] parts = content.split(":");
+            if (parts.length >= 4 && "DELIVERY_ACCEPTED".equals(parts[0])) {
+                String storeId = parts[1];
+                String productId = parts[2];
+                int qty = Integer.parseInt(parts[3]);
+
+                busy = true;
+
+                System.out.println("\n[" + getLocalName() + "] === Принят заказ магазина " + storeId +
+                        " (товар=" + productId + ", qty=" + qty + ") ===");
             System.out.println("[" + getLocalName() + "] Выезжаю со склада в " + LocalTime.now());
 
             // Имитируем выполнение маршрута с задержками
@@ -148,19 +148,29 @@ public class TruckAgent extends Agent {
                 Thread.currentThread().interrupt();
             }
 
-            // Отправляем отчет координатору
-            if (coordinatorAID != null) {
+                // Отправляем отчет напрямую магазину
                 ACLMessage report = new ACLMessage(ACLMessage.INFORM);
-                report.addReceiver(coordinatorAID);
-                report.setContent("ROUTE_COMPLETED:" + assignedRoute + ":status=SUCCESS:truck=" + truck.getTruckId());
+                report.addReceiver(msg.getSender());
+                report.setContent("DELIVERY_COMPLETE:store=" + storeId + ":truck=" + truck.getTruckId());
                 send(report);
-                System.out.println("[" + getLocalName() + "] → Отправлен отчет координатору о завершении маршрута");
-            } else {
-                System.err.println("[" + getLocalName() + "] ✗ Координатор не найден, отчет не отправлен");
-            }
+                System.out.println("[" + getLocalName() + "] → Отправлен отчет магазину о завершении доставки");
 
-            // Завершаем работу
-            block();
+                // Отдельное сообщение логгеру для построения расписания
+                ACLMessage logMsg = new ACLMessage(ACLMessage.INFORM);
+                logMsg.addReceiver(new AID("logger", AID.ISLOCALNAME));
+                logMsg.setContent("DELIVERY_COMPLETE:" + storeId + ":" + productId + ":" + qty + ":" + truck.getTruckId());
+                send(logMsg);
+                System.out.println("[" + getLocalName() + "] → Отправлен отчет логгеру о завершении доставки");
+
+                busy = false;
+            }
+        }
+
+        /**
+         * Обработка отклонения предложения магазином.
+         */
+        private void handleReject(ACLMessage msg) {
+            System.out.println("[" + getLocalName() + "] Предложение отклонено магазином: " + msg.getContent());
         }
 
         @Override
@@ -171,9 +181,5 @@ public class TruckAgent extends Agent {
 
     public Truck getTruck() {
         return truck;
-    }
-
-    public void setCoordinatorAID(AID coordinatorAID) {
-        this.coordinatorAID = coordinatorAID;
     }
 }

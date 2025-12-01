@@ -37,7 +37,7 @@ public class DataLoader {
     }
 
     public static List<Store> loadStores(String filename) throws IOException {
-        Map<String, Store> stores = new LinkedHashMap<>();
+        List<Store> stores = new ArrayList<>();
         
         try (Reader reader = new FileReader(filename)) {
             CSVFormat format = CSVFormat.DEFAULT.withFirstRecordAsHeader();
@@ -45,22 +45,17 @@ public class DataLoader {
 
             for (CSVRecord record : parser) {
                 String storeId = record.get("store_id");
-                if (stores.containsKey(storeId)) {
-                    continue;
-                }
-                String name = record.isMapped("store_name") ? record.get("store_name") : null;
-                String address = record.isMapped("address") ? record.get("address") : null;
                 double x = Double.parseDouble(record.get("x"));
                 double y = Double.parseDouble(record.get("y"));
                 LocalTime startTime = LocalTime.parse(record.get("time_window_start"));
                 LocalTime endTime = LocalTime.parse(record.get("time_window_end"));
 
-                Store store = new Store(storeId, name, address, x, y, startTime, endTime);
-                stores.put(storeId, store);
+                Store store = new Store(storeId, x, y, startTime, endTime);
+                stores.add(store);
             }
         }
 
-        return new ArrayList<>(stores.values());
+        return stores;
     }
 
     public static List<Truck> loadTrucks(String filename) throws IOException {
@@ -72,15 +67,12 @@ public class DataLoader {
 
             for (CSVRecord record : parser) {
                 String truckId = record.get("truck_id");
-                String truckName = record.isMapped("truck_name") ? record.get("truck_name") : null;
-                String vehicleType = record.isMapped("vehicle_type") ? record.get("vehicle_type") : null;
-                String driverName = record.isMapped("driver_name") ? record.get("driver_name") : null;
                 double capacity = Double.parseDouble(record.get("capacity"));
                 double costPerKm = Double.parseDouble(record.get("cost_per_km"));
                 double startX = Double.parseDouble(record.get("start_x"));
                 double startY = Double.parseDouble(record.get("start_y"));
 
-                trucks.add(new Truck(truckId, truckName, vehicleType, driverName, capacity, costPerKm, startX, startY));
+                trucks.add(new Truck(truckId, capacity, costPerKm, startX, startY));
             }
         }
 

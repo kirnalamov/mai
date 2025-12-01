@@ -1,20 +1,24 @@
 package agents;
 
 import jade.core.Agent;
-import jade.core.AID;
 import jade.core.behaviours.Behaviour;
 import jade.lang.acl.ACLMessage;
+import jade.lang.acl.MessageTemplate;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
 import jade.domain.FIPAAgentManagement.ServiceDescription;
 import model.Store;
 
 /**
  * Агент магазина
- * Подает запросы на доставку товаров
+ * Имеет собственные потребности и самостоятельно договаривается с грузовиками о доставке
  */
 public class StoreAgent extends Agent {
     private Store store;
-    private AID coordinatorAID;
+    // Условная потребность магазина (для простоты – одна партия товара)
+    private String productId = "P001";
+    private int quantity = 10;
+    private boolean cfpSent = false;
+    private boolean orderAccepted = false;
 
     @Override
     protected void setup() {
@@ -28,7 +32,7 @@ public class StoreAgent extends Agent {
             return;
         }
 
-        // Регистрируем в DF
+        // Регистрируемся в DF как равноправный сервис
         DFAgentDescription dfd = new DFAgentDescription();
         dfd.setName(getAID());
         ServiceDescription sd = new ServiceDescription();
@@ -42,34 +46,11 @@ public class StoreAgent extends Agent {
             fe.printStackTrace();
         }
 
-        // Ищем координатора через DF
-        findCoordinator();
-        
+        // Собственное поведение магазина:
+        // 1) инициирует запросы к грузовикам;
+        // 2) обрабатывает ответы и выбирает исполнителя;
+        // 3) получает уведомление о доставке.
         addBehaviour(new StoreServiceBehaviour());
-        addBehaviour(new RequestDeliveryBehaviour());
-    }
-    
-    /**
-     * Поиск координатора через Directory Facilitator
-     */
-    private void findCoordinator() {
-        DFAgentDescription template = new DFAgentDescription();
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("service");
-        sd.setName("coordinator");
-        template.addServices(sd);
-        
-        try {
-            DFAgentDescription[] result = jade.domain.DFService.search(this, template);
-            if (result.length > 0) {
-                coordinatorAID = result[0].getName();
-                System.out.println("[" + getLocalName() + "] Найден координатор: " + coordinatorAID.getName());
-            } else {
-                System.out.println("[" + getLocalName() + "] Координатор не найден, будет поиск позже");
-            }
-        } catch (jade.domain.FIPAException fe) {
-            fe.printStackTrace();
-        }
     }
 
     @Override
@@ -83,18 +64,31 @@ public class StoreAgent extends Agent {
     }
 
     /**
-     * Поведение магазина: обработка входящих сообщений
+     * Поведение магазина: отправляет CFP и обрабатывает ответы/уведомления.
      */
     private class StoreServiceBehaviour extends Behaviour {
         @Override
         public void action() {
-            ACLMessage msg = receive();
+            // Если ещё не рассылали CFP — делаем это один раз
+            if (!cfpSent) {
+                sendCfpToTrucks();
+                cfpSent = true;
+            }
+
+            // Обрабатываем как предложения грузовиков, так и уведомления о доставке
+            MessageTemplate mt = MessageTemplate.or(
+                    MessageTemplate.MatchPerformative(ACLMessage.PROPOSE),
+                    MessageTemplate.MatchPerformative(ACLMessage.INFORM)
+            );
+            ACLMessage msg = receive(mt);
             if (msg != null) {
                 System.out.println("[" + getLocalName() + "] Получено сообщение от " + msg.getSender().getName() + ": " + msg.getContent());
 
                 if (msg.getPerformative() == ACLMessage.INFORM) {
                     // Уведомление о доставке
                     handleDeliveryNotification(msg);
+                } else if (msg.getPerformative() == ACLMessage.PROPOSE) {
+                    handleProposal(msg);
                 }
             } else {
                 block();
@@ -110,68 +104,64 @@ public class StoreAgent extends Agent {
             }
         }
 
+        /**
+         * Отправка CFP всем доступным грузовикам через DF.
+         */
+        private void sendCfpToTrucks() {
+            try {
+                System.out.println("[" + getLocalName() + "] Поиск доступных грузовиков через DF...");
+                DFAgentDescription template = new DFAgentDescription();
+                ServiceDescription sd = new ServiceDescription();
+                sd.setType("service");
+                sd.setName("truck");
+                template.addServices(sd);
+
+                DFAgentDescription[] result = jade.domain.DFService.search(StoreAgent.this, template);
+                if (result.length == 0) {
+                    System.out.println("[" + getLocalName() + "] Грузовики не найдены, CFP не будет отправлен");
+                    return;
+                }
+
+                ACLMessage cfp = new ACLMessage(ACLMessage.CFP);
+                for (DFAgentDescription desc : result) {
+                    cfp.addReceiver(desc.getName());
+                }
+                cfp.setContent("DELIVERY_CFP:" + store.getStoreId() + ":" + productId + ":" + quantity);
+                send(cfp);
+                System.out.println("[" + getLocalName() + "] → Отправлен CFP всем грузовикам (товар=" + productId + ", qty=" + quantity + ")");
+            } catch (jade.domain.FIPAException e) {
+                e.printStackTrace();
+            }
+        }
+
+        /**
+         * Обработка предложения от грузовика.
+         * Принимаем первое подходящее и отклоняем остальные.
+         */
+        private void handleProposal(ACLMessage msg) {
+            if (!orderAccepted) {
+                ACLMessage accept = msg.createReply();
+                accept.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
+                accept.setContent("DELIVERY_ACCEPTED:" + store.getStoreId() + ":" + productId + ":" + quantity);
+                send(accept);
+                orderAccepted = true;
+                System.out.println("[" + getLocalName() + "] → Принято предложение грузовика " + msg.getSender().getLocalName());
+            } else {
+                ACLMessage reject = msg.createReply();
+                reject.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                reject.setContent("DELIVERY_REJECTED:" + store.getStoreId());
+                send(reject);
+                System.out.println("[" + getLocalName() + "] → Отклонено дополнительное предложение от " + msg.getSender().getLocalName());
+            }
+        }
+
         @Override
         public boolean done() {
             return false;
         }
     }
-    
-    /**
-     * Поведение: отправка запроса на доставку координатору
-     */
-    private class RequestDeliveryBehaviour extends Behaviour {
-        private boolean requestSent = false;
-        
-        @Override
-        public void action() {
-            if (!requestSent) {
-                // Ждем немного, чтобы координатор успел запуститься
-                try {
-                    Thread.sleep(3000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                
-                // Если координатор не найден, ищем снова
-                if (coordinatorAID == null) {
-                    findCoordinator();
-                }
-                
-                if (coordinatorAID != null) {
-                    sendDeliveryRequest();
-                    requestSent = true;
-                } else {
-                    System.out.println("[" + getLocalName() + "] Координатор еще не найден, повторная попытка...");
-                    try {
-                        Thread.sleep(2000);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-            } else {
-                block();
-            }
-        }
-        
-        private void sendDeliveryRequest() {
-            ACLMessage msg = new ACLMessage(ACLMessage.INFORM);
-            msg.addReceiver(coordinatorAID);
-            msg.setContent("DELIVERY_REQUEST:" + store.getStoreId() + ":store_ready");
-            send(msg);
-            System.out.println("[" + getLocalName() + "] → Отправлен запрос на доставку координатору: " + coordinatorAID.getName());
-        }
-        
-        @Override
-        public boolean done() {
-            return requestSent;
-        }
-    }
 
     public Store getStore() {
         return store;
-    }
-
-    public void setCoordinatorAID(AID coordinatorAID) {
-        this.coordinatorAID = coordinatorAID;
     }
 }
