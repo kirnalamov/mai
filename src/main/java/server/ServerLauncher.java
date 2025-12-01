@@ -5,7 +5,6 @@ import jade.core.ProfileImpl;
 import jade.core.Runtime;
 import jade.wrapper.AgentContainer;
 import jade.wrapper.AgentController;
-import jade.wrapper.AgentState;
 import agents.*;
 import model.*;
 import io.DataLoader;
@@ -61,17 +60,8 @@ public class ServerLauncher {
             System.out.println("  - Магазинов: " + stores.size());
             System.out.println("  - Грузовиков: " + trucks.size());
 
-            // Создаем и запускаем Coordinator Agent
-            System.out.println("\nСоздание агентов...");
-            AgentController coordinatorController = mainContainer.createNewAgent(
-                "coordinator",
-                "agents.CoordinatorAgent",
-                null
-            );
-            coordinatorController.start();
-            System.out.println("✓ CoordinatorAgent запущен");
-
             // Создаем и запускаем Warehouse Agent
+            System.out.println("\nСоздание агентов...");
             AgentController warehouseController = mainContainer.createNewAgent(
                 "warehouse",
                 "agents.WarehouseAgent",
@@ -97,21 +87,20 @@ public class ServerLauncher {
             }
             
             System.out.println("\n[SERVER] Создано агентов:");
-            System.out.println("  - Координатор: 1");
+            System.out.println("  - Координатор: 0 (решения принимают сами агенты)");
             System.out.println("  - Склад: 1");
             System.out.println("  - Грузовиков: " + truckCount);
             System.out.println("  - Магазинов: 0 (будут созданы на клиенте)");
 
             System.out.println("\n=== Сервер готов к работе ===");
             System.out.println("Для подключения клиентов используйте адрес: localhost:" + port);
-            System.out.println("Ожидание подключения клиента и выполнения задач...\n");
-
-            // Ждем завершения работы координатора
-            waitForCompletion(coordinatorController);
+            System.out.println("Ожидание подключения клиентов. Агенты работают в автономном режиме.\n");
             
-            System.out.println("\n=== Сервер завершает работу ===");
-            mainContainer.kill();
-            System.exit(0);
+            // Оставляем платформу работать до ручного завершения процесса
+            Object lock = new Object();
+            synchronized (lock) {
+                lock.wait();
+            }
 
         } catch (Exception e) {
             System.err.println("Ошибка при запуске сервера: " + e.getMessage());
@@ -141,22 +130,4 @@ public class ServerLauncher {
         return DataLoader.loadTrucks("data/trucks.csv");
     }
     
-    /**
-     * Ожидание завершения работы координатора
-     */
-    private static void waitForCompletion(AgentController coordinatorController) {
-        try {
-            // Ждем пока координатор не завершит работу
-            while (true) {
-                Thread.sleep(2000);
-                // Проверяем статус координатора
-                jade.wrapper.State state = coordinatorController.getState();
-                if (state != null && state.getCode() == AgentState.cAGENT_STATE_DELETED) {
-                    break;
-                }
-            }
-        } catch (Exception e) {
-            // Игнорируем ошибки
-        }
-    }
 }

@@ -7,16 +7,24 @@ import jade.lang.acl.ACLMessage;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
 import jade.domain.FIPAAgentManagement.ServiceDescription;
 import model.Truck;
+import model.Product;
+import io.DataLoader;
+import util.DistanceCalculator;
+
+import java.io.IOException;
 import java.time.LocalTime;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * Агент грузовика
- * Выполняет маршрут доставки товаров
+ * Агент грузовика.
+ * В децентрализованной схеме сам принимает решения по заявкам магазинов:
+ * отвечает на CFP, оценивает стоимость и имитирует выполнение доставки.
  */
 public class TruckAgent extends Agent {
     private Truck truck;
-    private AID coordinatorAID;
-    private String assignedRoute;
+    private Map<String, Product> products;
+    private AID warehouseAID;
 
     @Override
     protected void setup() {
@@ -28,6 +36,16 @@ public class TruckAgent extends Agent {
             System.err.println("Ошибка инициализации TruckAgent: отсутствуют аргументы");
             doDelete();
             return;
+        }
+
+        // Локальная загрузка каталога товаров
+        products = new HashMap<>();
+        try {
+            for (Product p : DataLoader.loadProducts("data/products.csv")) {
+                products.put(p.getProductId(), p);
+            }
+        } catch (IOException e) {
+            System.err.println("[" + getLocalName() + "] Ошибка загрузки товаров: " + e.getMessage());
         }
 
         // Регистрируем в DF
@@ -44,29 +62,24 @@ public class TruckAgent extends Agent {
             fe.printStackTrace();
         }
 
-        // Ищем координатора
-        findCoordinator();
-        
+        findWarehouse();
         addBehaviour(new TruckServiceBehaviour());
     }
-    
-    /**
-     * Поиск координатора через Directory Facilitator
-     */
-    private void findCoordinator() {
+
+    private void findWarehouse() {
         DFAgentDescription template = new DFAgentDescription();
         ServiceDescription sd = new ServiceDescription();
         sd.setType("service");
-        sd.setName("coordinator");
+        sd.setName("warehouse");
         template.addServices(sd);
-        
+
         try {
             DFAgentDescription[] result = jade.domain.DFService.search(this, template);
             if (result.length > 0) {
-                coordinatorAID = result[0].getName();
-                System.out.println("[" + getLocalName() + "] Найден координатор: " + coordinatorAID.getName());
+                warehouseAID = result[0].getName();
+                System.out.println("[" + getLocalName() + "] Найден склад для логирования: " + warehouseAID.getName());
             } else {
-                System.out.println("[" + getLocalName() + "] Координатор не найден, будет поиск позже");
+                System.out.println("[" + getLocalName() + "] Склад не найден, отчеты будут только магазину");
             }
         } catch (jade.domain.FIPAException fe) {
             fe.printStackTrace();
@@ -87,9 +100,7 @@ public class TruckAgent extends Agent {
      * Поведение грузовика
      */
     private class TruckServiceBehaviour extends Behaviour {
-        private boolean routeAssigned = false;
-        private boolean routeExecuting = false;
-        private int stopIndex = 0;
+        private boolean busy = false;
 
         @Override
         public void action() {
@@ -97,70 +108,133 @@ public class TruckAgent extends Agent {
             if (msg != null) {
                 System.out.println("[" + getLocalName() + "] Получено сообщение: " + msg.getContent());
 
-                if (msg.getPerformative() == ACLMessage.INFORM) {
-                    if (msg.getContent().startsWith("ROUTE:")) {
-                        handleRouteAssignment(msg);
-                    }
+                switch (msg.getPerformative()) {
+                    case ACLMessage.CFP:
+                        handleCFP(msg);
+                        break;
+                    case ACLMessage.ACCEPT_PROPOSAL:
+                        handleAccept(msg);
+                        break;
+                    case ACLMessage.REJECT_PROPOSAL:
+                        // Можно залогировать отказ, но логика проста
+                        System.out.println("[" + getLocalName() + "] Предложение отклонено магазином");
+                        break;
+                    default:
+                        break;
                 }
             } else {
-                if (routeAssigned && !routeExecuting) {
-                    // Начинаем выполнение маршрута
-                    executeRoute();
-                } else {
-                    block();
-                }
+                block();
             }
         }
 
-        private void handleRouteAssignment(ACLMessage msg) {
+        /**
+         * Обработка CFP от магазина:
+         * CFP:REQ_x:storeId:x:y:window:productId:qty
+         */
+        private void handleCFP(ACLMessage msg) {
             String content = msg.getContent();
-            String[] parts = content.split(":");
-            if (parts.length >= 2) {
-                assignedRoute = parts[1];
-                routeAssigned = true;
-                System.out.println("[" + getLocalName() + "] ← Получен маршрут от координатора: " + assignedRoute);
-                if (parts.length >= 3) {
-                    System.out.println("[" + getLocalName() + "]   Количество остановок: " + parts[2].replace("stops=", ""));
-                }
-
-                ACLMessage reply = msg.createReply();
-                reply.setPerformative(ACLMessage.AGREE);
-                reply.setContent("ROUTE_ACCEPTED:" + assignedRoute);
-                send(reply);
-                System.out.println("[" + getLocalName() + "] → Отправлено подтверждение координатору");
+            if (content == null || !content.startsWith("CFP:")) {
+                return;
             }
+            String[] parts = content.split(":");
+            if (parts.length < 8) {
+                return;
+            }
+
+            String reqId = parts[1];
+            String storeId = parts[2];
+            double storeX = Double.parseDouble(parts[3]);
+            double storeY = Double.parseDouble(parts[4]);
+            String productId = parts[6];
+            int qty = Integer.parseInt(parts[7]);
+
+            Product product = products.get(productId);
+            if (product == null) {
+                System.out.println("[" + getLocalName() + "] Неизвестный товар " + productId + ", отправляю REFUSE");
+                ACLMessage refuse = msg.createReply();
+                refuse.setPerformative(ACLMessage.REFUSE);
+                refuse.setContent("REFUSE:" + reqId);
+                send(refuse);
+                return;
+            }
+
+            double weight = product.getUnitWeight() * qty;
+            if (!truck.hasCapacity(weight) || busy) {
+                ACLMessage refuse = msg.createReply();
+                refuse.setPerformative(ACLMessage.REFUSE);
+                refuse.setContent("REFUSE:" + reqId);
+                send(refuse);
+                return;
+            }
+
+            // Рассчитываем расстояние и стоимость (от склада до магазина)
+            double distanceToStore = DistanceCalculator.calculateDistance(
+                    truck.getStartX(), truck.getStartY(), storeX, storeY);
+            double roundTrip = distanceToStore * 2;
+            double cost = DistanceCalculator.calculateCost(roundTrip, truck.getCostPerKm());
+
+            ACLMessage propose = msg.createReply();
+            propose.setPerformative(ACLMessage.PROPOSE);
+            propose.setContent("PROPOSE:" + reqId + ":" + storeId + ":" + productId + ":" + qty + ":" + cost + ":" + distanceToStore);
+            send(propose);
+            System.out.println("[" + getLocalName() + "] → PROPOSE по заявке " + reqId +
+                    " (стоимость " + String.format("%.2f", cost) + ")");
         }
 
-        private void executeRoute() {
-            routeExecuting = true;
-            System.out.println("\n[" + getLocalName() + "] === Начинаю выполнение маршрута: " + assignedRoute + " ===");
-            System.out.println("[" + getLocalName() + "] Выезжаю со склада в " + LocalTime.now());
+        /**
+         * Обработка ACCEPT_PROPOSAL:
+         * DECISION:reqId;key=value;...
+         */
+        private void handleAccept(ACLMessage msg) {
+            String content = msg.getContent();
+            if (content == null || !content.startsWith("DECISION:")) {
+                return;
+            }
 
-            // Имитируем выполнение маршрута с задержками
+            Map<String, String> data = parsePayload(content);
+            String header = content.split(";", 2)[0];
+            String reqId = header.split(":")[1];
+            System.out.println("\n[" + getLocalName() + "] === Принято решение участвовать в доставке: " +
+                    reqId + " ===");
+            busy = true;
+
+            LocalTime depart = LocalTime.now();
             try {
                 Thread.sleep(1000);
-                System.out.println("[" + getLocalName() + "] → В пути к первой остановке...");
+                System.out.println("[" + getLocalName() + "] → В пути к магазину...");
                 Thread.sleep(1000);
                 System.out.println("[" + getLocalName() + "] → Выполняю доставку...");
                 Thread.sleep(1000);
-                System.out.println("[" + getLocalName() + "] ✓ Маршрут выполнен успешно!");
+                System.out.println("[" + getLocalName() + "] ✓ Доставка выполнена успешно!");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            LocalTime arrival = LocalTime.now();
 
-            // Отправляем отчет координатору
-            if (coordinatorAID != null) {
-                ACLMessage report = new ACLMessage(ACLMessage.INFORM);
-                report.addReceiver(coordinatorAID);
-                report.setContent("ROUTE_COMPLETED:" + assignedRoute + ":status=SUCCESS:truck=" + truck.getTruckId());
-                send(report);
-                System.out.println("[" + getLocalName() + "] → Отправлен отчет координатору о завершении маршрута");
-            } else {
-                System.err.println("[" + getLocalName() + "] ✗ Координатор не найден, отчет не отправлен");
+            StringBuilder report = new StringBuilder("DELIVERY_COMPLETE:" + reqId);
+            report.append(";truckId=").append(truck.getTruckId());
+            report.append(";truckName=").append(truck.getDisplayName());
+            report.append(";driver=").append(truck.getDriverName());
+
+            for (Map.Entry<String, String> entry : data.entrySet()) {
+                report.append(";").append(entry.getKey()).append("=").append(entry.getValue());
+            }
+            report.append(";departure=").append(depart);
+            report.append(";arrival=").append(arrival);
+
+            ACLMessage done = new ACLMessage(ACLMessage.INFORM);
+            done.addReceiver(msg.getSender());
+            done.setContent(report.toString());
+            send(done);
+
+            if (warehouseAID != null) {
+                ACLMessage warehouseMsg = new ACLMessage(ACLMessage.INFORM);
+                warehouseMsg.addReceiver(warehouseAID);
+                warehouseMsg.setContent(report.toString());
+                send(warehouseMsg);
             }
 
-            // Завершаем работу
-            block();
+            busy = false;
         }
 
         @Override
@@ -173,7 +247,15 @@ public class TruckAgent extends Agent {
         return truck;
     }
 
-    public void setCoordinatorAID(AID coordinatorAID) {
-        this.coordinatorAID = coordinatorAID;
+    private Map<String, String> parsePayload(String content) {
+        Map<String, String> data = new HashMap<>();
+        String[] parts = content.split(";");
+        for (int i = 1; i < parts.length; i++) {
+            String[] kv = parts[i].split("=", 2);
+            if (kv.length == 2) {
+                data.put(kv[0], kv[1]);
+            }
+        }
+        return data;
     }
 }
