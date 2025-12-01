@@ -66,7 +66,7 @@ public class RoutePlanningEngine {
 
         DeliveryRoute route = new DeliveryRoute(
             "ROUTE_" + routeId,
-            truck,
+            truck.getTruckId(),
             departureTime
         );
 
@@ -106,14 +106,8 @@ public class RoutePlanningEngine {
             }
 
             // Создаём остановку
-            String window = store.getTimeWindowStart() + "–" + store.getTimeWindowEnd();
             DeliveryRoute.RouteStop stop = new DeliveryRoute.RouteStop(
-                nextStoreId,
-                store.getName(),
-                store.getAddress(),
-                window,
-                store.getX(),
-                store.getY()
+                nextStoreId, store.getX(), store.getY()
             );
             stop.setDistanceFromPreviousStop(distanceToStore);
             stop.setArrivalTime(arrivalTime);
@@ -128,9 +122,7 @@ public class RoutePlanningEngine {
                 if (currentLoad + stopLoadWeight + request.getTotalWeight() <= truck.getCapacity()) {
                     DeliveryRoute.DeliveryItem item = new DeliveryRoute.DeliveryItem(
                         request.getProductId(),
-                        product.getName(),
                         request.getQuantity(),
-                        product.getUnitWeight(),
                         request.getTotalWeight()
                     );
                     stop.addItem(item);

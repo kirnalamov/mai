@@ -13,23 +13,15 @@ public class DeliveryRoute implements Serializable {
 
     private String routeId;
     private String truckId;
-    private String truckName;
-    private String vehicleType;
-    private String driverName;
-    private double truckCapacity;
     private List<RouteStop> stops;
     private double totalDistance;
     private double totalCost;
     private LocalTime departureTime;
     private LocalTime estimatedReturnTime;
 
-    public DeliveryRoute(String routeId, Truck truck, LocalTime departureTime) {
+    public DeliveryRoute(String routeId, String truckId, LocalTime departureTime) {
         this.routeId = routeId;
-        this.truckId = truck.getTruckId();
-        this.truckName = truck.getDisplayName();
-        this.vehicleType = truck.getVehicleType();
-        this.driverName = truck.getDriverName();
-        this.truckCapacity = truck.getCapacity();
+        this.truckId = truckId;
         this.stops = new ArrayList<>();
         this.totalDistance = 0;
         this.totalCost = 0;
@@ -40,9 +32,6 @@ public class DeliveryRoute implements Serializable {
         private static final long serialVersionUID = 1L;
 
         private String storeId;
-        private String storeName;
-        private String address;
-        private String timeWindow;
         private double x;
         private double y;
         private LocalTime arrivalTime;
@@ -50,11 +39,8 @@ public class DeliveryRoute implements Serializable {
         private List<DeliveryItem> items;
         private double distanceFromPreviousStop;
 
-        public RouteStop(String storeId, String storeName, String address, String timeWindow, double x, double y) {
+        public RouteStop(String storeId, double x, double y) {
             this.storeId = storeId;
-            this.storeName = storeName;
-            this.address = address;
-            this.timeWindow = timeWindow;
             this.x = x;
             this.y = y;
             this.items = new ArrayList<>();
@@ -62,9 +48,6 @@ public class DeliveryRoute implements Serializable {
 
         // Getters and setters
         public String getStoreId() { return storeId; }
-        public String getStoreName() { return storeName; }
-        public String getAddress() { return address; }
-        public String getTimeWindow() { return timeWindow; }
         public double getX() { return x; }
         public double getY() { return y; }
         public LocalTime getArrivalTime() { return arrivalTime; }
@@ -86,32 +69,22 @@ public class DeliveryRoute implements Serializable {
         private static final long serialVersionUID = 1L;
 
         private String productId;
-        private String productName;
         private int quantity;
         private double weight;
-        private double unitWeight;
 
-        public DeliveryItem(String productId, String productName, int quantity, double unitWeight, double weight) {
+        public DeliveryItem(String productId, int quantity, double weight) {
             this.productId = productId;
-            this.productName = productName;
             this.quantity = quantity;
-            this.unitWeight = unitWeight;
             this.weight = weight;
         }
 
         public String getProductId() { return productId; }
-        public String getProductName() { return productName; }
         public int getQuantity() { return quantity; }
         public double getWeight() { return weight; }
-        public double getUnitWeight() { return unitWeight; }
     }
 
     public String getRouteId() { return routeId; }
     public String getTruckId() { return truckId; }
-    public String getTruckName() { return truckName; }
-    public String getVehicleType() { return vehicleType; }
-    public String getDriverName() { return driverName; }
-    public double getTruckCapacity() { return truckCapacity; }
     public List<RouteStop> getStops() { return stops; }
     public double getTotalDistance() { return totalDistance; }
     public void setTotalDistance(double totalDistance) { this.totalDistance = totalDistance; }
@@ -129,7 +102,7 @@ public class DeliveryRoute implements Serializable {
     public String toString() {
         return "Route{" +
                 "routeId='" + routeId + '\'' +
-                ", truck='" + truckName + " (" + truckId + ")'"+
+                ", truck='" + truckId + '\'' +
                 ", stops=" + stops.size() +
                 ", distance=" + String.format("%.2f", totalDistance) +
                 ", cost=" + String.format("%.2f", totalCost) +

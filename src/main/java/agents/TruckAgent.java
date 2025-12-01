@@ -4,27 +4,18 @@ import jade.core.Agent;
 import jade.core.AID;
 import jade.core.behaviours.Behaviour;
 import jade.lang.acl.ACLMessage;
+import jade.lang.acl.MessageTemplate;
 import jade.domain.FIPAAgentManagement.DFAgentDescription;
 import jade.domain.FIPAAgentManagement.ServiceDescription;
 import model.Truck;
-import model.Product;
-import io.DataLoader;
-import util.DistanceCalculator;
-
-import java.io.IOException;
 import java.time.LocalTime;
-import java.util.HashMap;
-import java.util.Map;
 
 /**
- * Агент грузовика.
- * В децентрализованной схеме сам принимает решения по заявкам магазинов:
- * отвечает на CFP, оценивает стоимость и имитирует выполнение доставки.
+ * Агент грузовика
+ * Самостоятельно принимает решения о приеме заказов от магазинов и выполняет доставки
  */
 public class TruckAgent extends Agent {
     private Truck truck;
-    private Map<String, Product> products;
-    private AID warehouseAID;
 
     @Override
     protected void setup() {
@@ -36,16 +27,6 @@ public class TruckAgent extends Agent {
             System.err.println("Ошибка инициализации TruckAgent: отсутствуют аргументы");
             doDelete();
             return;
-        }
-
-        // Локальная загрузка каталога товаров
-        products = new HashMap<>();
-        try {
-            for (Product p : DataLoader.loadProducts("data/products.csv")) {
-                products.put(p.getProductId(), p);
-            }
-        } catch (IOException e) {
-            System.err.println("[" + getLocalName() + "] Ошибка загрузки товаров: " + e.getMessage());
         }
 
         // Регистрируем в DF
@@ -62,28 +43,8 @@ public class TruckAgent extends Agent {
             fe.printStackTrace();
         }
 
-        findWarehouse();
+        // Поведение грузовика: принимает CFP от магазинов и договаривается о доставке
         addBehaviour(new TruckServiceBehaviour());
-    }
-
-    private void findWarehouse() {
-        DFAgentDescription template = new DFAgentDescription();
-        ServiceDescription sd = new ServiceDescription();
-        sd.setType("service");
-        sd.setName("warehouse");
-        template.addServices(sd);
-
-        try {
-            DFAgentDescription[] result = jade.domain.DFService.search(this, template);
-            if (result.length > 0) {
-                warehouseAID = result[0].getName();
-                System.out.println("[" + getLocalName() + "] Найден склад для логирования: " + warehouseAID.getName());
-            } else {
-                System.out.println("[" + getLocalName() + "] Склад не найден, отчеты будут только магазину");
-            }
-        } catch (jade.domain.FIPAException fe) {
-            fe.printStackTrace();
-        }
     }
 
     @Override
@@ -104,23 +65,23 @@ public class TruckAgent extends Agent {
 
         @Override
         public void action() {
-            ACLMessage msg = receive();
+            MessageTemplate mt = MessageTemplate.or(
+                    MessageTemplate.MatchPerformative(ACLMessage.CFP),
+                    MessageTemplate.or(
+                            MessageTemplate.MatchPerformative(ACLMessage.ACCEPT_PROPOSAL),
+                            MessageTemplate.MatchPerformative(ACLMessage.REJECT_PROPOSAL)
+                    )
+            );
+            ACLMessage msg = receive(mt);
             if (msg != null) {
                 System.out.println("[" + getLocalName() + "] Получено сообщение: " + msg.getContent());
 
-                switch (msg.getPerformative()) {
-                    case ACLMessage.CFP:
-                        handleCFP(msg);
-                        break;
-                    case ACLMessage.ACCEPT_PROPOSAL:
-                        handleAccept(msg);
-                        break;
-                    case ACLMessage.REJECT_PROPOSAL:
-                        // Можно залогировать отказ, но логика проста
-                        System.out.println("[" + getLocalName() + "] Предложение отклонено магазином");
-                        break;
-                    default:
-                        break;
+                if (msg.getPerformative() == ACLMessage.CFP) {
+                    handleCFP(msg);
+                } else if (msg.getPerformative() == ACLMessage.ACCEPT_PROPOSAL) {
+                    handleAccept(msg);
+                } else if (msg.getPerformative() == ACLMessage.REJECT_PROPOSAL) {
+                    handleReject(msg);
                 }
             } else {
                 block();
@@ -128,113 +89,88 @@ public class TruckAgent extends Agent {
         }
 
         /**
-         * Обработка CFP от магазина:
-         * CFP:REQ_x:storeId:x:y:window:productId:qty
+         * Обработка CFP от магазина: грузовик сам решает, может ли взять заказ.
          */
         private void handleCFP(ACLMessage msg) {
             String content = msg.getContent();
-            if (content == null || !content.startsWith("CFP:")) {
-                return;
-            }
             String[] parts = content.split(":");
-            if (parts.length < 8) {
-                return;
+            if (parts.length >= 4 && "DELIVERY_CFP".equals(parts[0])) {
+                String storeId = parts[1];
+                String productId = parts[2];
+                int qty = Integer.parseInt(parts[3]);
+
+                // Простое решение: если грузовик сейчас не занят и есть место – предлагает услугу
+                double weight = qty * 1.0; // условный вес 1 единица = 1
+                if (!busy && truck.hasCapacity(weight)) {
+                    ACLMessage reply = msg.createReply();
+                    reply.setPerformative(ACLMessage.PROPOSE);
+                    // В предложении можно кодировать оценку стоимости
+                    double estimatedCost = truck.getCostPerKm() * 10; // упрощенная оценка
+                    reply.setContent("OFFER:" + storeId + ":" + productId + ":" + qty + ":cost=" + estimatedCost);
+                    send(reply);
+                    System.out.println("[" + getLocalName() + "] → Отправлено предложение магазину " + storeId);
+                } else {
+                    ACLMessage reply = msg.createReply();
+                    reply.setPerformative(ACLMessage.REFUSE);
+                    reply.setContent("BUSY_OR_NO_CAPACITY");
+                    send(reply);
+                    System.out.println("[" + getLocalName() + "] → Отказ: нет возможности взять заказ");
+                }
             }
-
-            String reqId = parts[1];
-            String storeId = parts[2];
-            double storeX = Double.parseDouble(parts[3]);
-            double storeY = Double.parseDouble(parts[4]);
-            String productId = parts[6];
-            int qty = Integer.parseInt(parts[7]);
-
-            Product product = products.get(productId);
-            if (product == null) {
-                System.out.println("[" + getLocalName() + "] Неизвестный товар " + productId + ", отправляю REFUSE");
-                ACLMessage refuse = msg.createReply();
-                refuse.setPerformative(ACLMessage.REFUSE);
-                refuse.setContent("REFUSE:" + reqId);
-                send(refuse);
-                return;
-            }
-
-            double weight = product.getUnitWeight() * qty;
-            if (!truck.hasCapacity(weight) || busy) {
-                ACLMessage refuse = msg.createReply();
-                refuse.setPerformative(ACLMessage.REFUSE);
-                refuse.setContent("REFUSE:" + reqId);
-                send(refuse);
-                return;
-            }
-
-            // Рассчитываем расстояние и стоимость (от склада до магазина)
-            double distanceToStore = DistanceCalculator.calculateDistance(
-                    truck.getStartX(), truck.getStartY(), storeX, storeY);
-            double roundTrip = distanceToStore * 2;
-            double cost = DistanceCalculator.calculateCost(roundTrip, truck.getCostPerKm());
-
-            ACLMessage propose = msg.createReply();
-            propose.setPerformative(ACLMessage.PROPOSE);
-            propose.setContent("PROPOSE:" + reqId + ":" + storeId + ":" + productId + ":" + qty + ":" + cost + ":" + distanceToStore);
-            send(propose);
-            System.out.println("[" + getLocalName() + "] → PROPOSE по заявке " + reqId +
-                    " (стоимость " + String.format("%.2f", cost) + ")");
         }
 
         /**
-         * Обработка ACCEPT_PROPOSAL:
-         * DECISION:reqId;key=value;...
+         * Магазин принял наше предложение – выполняем доставку.
          */
         private void handleAccept(ACLMessage msg) {
             String content = msg.getContent();
-            if (content == null || !content.startsWith("DECISION:")) {
-                return;
-            }
+            String[] parts = content.split(":");
+            if (parts.length >= 4 && "DELIVERY_ACCEPTED".equals(parts[0])) {
+                String storeId = parts[1];
+                String productId = parts[2];
+                int qty = Integer.parseInt(parts[3]);
 
-            Map<String, String> data = parsePayload(content);
-            String header = content.split(";", 2)[0];
-            String reqId = header.split(":")[1];
-            System.out.println("\n[" + getLocalName() + "] === Принято решение участвовать в доставке: " +
-                    reqId + " ===");
-            busy = true;
+                busy = true;
 
-            LocalTime depart = LocalTime.now();
+                System.out.println("\n[" + getLocalName() + "] === Принят заказ магазина " + storeId +
+                        " (товар=" + productId + ", qty=" + qty + ") ===");
+            System.out.println("[" + getLocalName() + "] Выезжаю со склада в " + LocalTime.now());
+
+            // Имитируем выполнение маршрута с задержками
             try {
                 Thread.sleep(1000);
-                System.out.println("[" + getLocalName() + "] → В пути к магазину...");
+                System.out.println("[" + getLocalName() + "] → В пути к первой остановке...");
                 Thread.sleep(1000);
                 System.out.println("[" + getLocalName() + "] → Выполняю доставку...");
                 Thread.sleep(1000);
-                System.out.println("[" + getLocalName() + "] ✓ Доставка выполнена успешно!");
+                System.out.println("[" + getLocalName() + "] ✓ Маршрут выполнен успешно!");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            LocalTime arrival = LocalTime.now();
 
-            StringBuilder report = new StringBuilder("DELIVERY_COMPLETE:" + reqId);
-            report.append(";truckId=").append(truck.getTruckId());
-            report.append(";truckName=").append(truck.getDisplayName());
-            report.append(";driver=").append(truck.getDriverName());
+                // Отправляем отчет напрямую магазину
+                ACLMessage report = new ACLMessage(ACLMessage.INFORM);
+                report.addReceiver(msg.getSender());
+                report.setContent("DELIVERY_COMPLETE:store=" + storeId + ":truck=" + truck.getTruckId());
+                send(report);
+                System.out.println("[" + getLocalName() + "] → Отправлен отчет магазину о завершении доставки");
 
-            for (Map.Entry<String, String> entry : data.entrySet()) {
-                report.append(";").append(entry.getKey()).append("=").append(entry.getValue());
+                // Отдельное сообщение логгеру для построения расписания
+                ACLMessage logMsg = new ACLMessage(ACLMessage.INFORM);
+                logMsg.addReceiver(new AID("logger", AID.ISLOCALNAME));
+                logMsg.setContent("DELIVERY_COMPLETE:" + storeId + ":" + productId + ":" + qty + ":" + truck.getTruckId());
+                send(logMsg);
+                System.out.println("[" + getLocalName() + "] → Отправлен отчет логгеру о завершении доставки");
+
+                busy = false;
             }
-            report.append(";departure=").append(depart);
-            report.append(";arrival=").append(arrival);
+        }
 
-            ACLMessage done = new ACLMessage(ACLMessage.INFORM);
-            done.addReceiver(msg.getSender());
-            done.setContent(report.toString());
-            send(done);
-
-            if (warehouseAID != null) {
-                ACLMessage warehouseMsg = new ACLMessage(ACLMessage.INFORM);
-                warehouseMsg.addReceiver(warehouseAID);
-                warehouseMsg.setContent(report.toString());
-                send(warehouseMsg);
-            }
-
-            busy = false;
+        /**
+         * Обработка отклонения предложения магазином.
+         */
+        private void handleReject(ACLMessage msg) {
+            System.out.println("[" + getLocalName() + "] Предложение отклонено магазином: " + msg.getContent());
         }
 
         @Override
@@ -245,17 +181,5 @@ public class TruckAgent extends Agent {
 
     public Truck getTruck() {
         return truck;
-    }
-
-    private Map<String, String> parsePayload(String content) {
-        Map<String, String> data = new HashMap<>();
-        String[] parts = content.split(";");
-        for (int i = 1; i < parts.length; i++) {
-            String[] kv = parts[i].split("=", 2);
-            if (kv.length == 2) {
-                data.put(kv[0], kv[1]);
-            }
-        }
-        return data;
     }
 }
