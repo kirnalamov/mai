@@ -121,7 +121,7 @@ ls data/
 **Команда:**
 
 ```bash
-java -cp jade-delivery-system.jar client.ClientLauncher 192.168.1.100 1099 ClientMachine2
+java -cp jade-delivery-system.jar client.ClientLauncher 26.59.86.171 1099 ClientMachine2
 ```
 
 Где:

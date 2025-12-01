@@ -26,7 +26,7 @@ public class ClientLauncher {
 
     public static void main(String[] args) {
         // Поддержка запуска без аргументов для локального тестирования
-        String serverHost = "localhost";
+        String serverHost = "26.59.86.171";
         int serverPort = 1099;  // Порт по умолчанию
         String clientName = "ClientContainer";
         
@@ -64,6 +64,7 @@ public class ClientLauncher {
 
             // Создаем профиль удаленного контейнера
             Profile profile = new ProfileImpl();
+            profile.setParameter(Profile.GUI, "true");
             profile.setParameter(Profile.MAIN_HOST, serverHost);
             profile.setParameter(Profile.MAIN_PORT, String.valueOf(serverPort));
             profile.setParameter(Profile.CONTAINER_NAME, clientName);
