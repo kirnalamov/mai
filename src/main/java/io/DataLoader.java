@@ -38,6 +38,7 @@ public class DataLoader {
 
     public static List<Store> loadStores(String filename) throws IOException {
         List<Store> stores = new ArrayList<>();
+        Map<String, Store> storeMap = new HashMap<>(); // Для устранения дубликатов
         
         try (Reader reader = new FileReader(filename)) {
             CSVFormat format = CSVFormat.DEFAULT.withFirstRecordAsHeader();
@@ -45,12 +46,19 @@ public class DataLoader {
 
             for (CSVRecord record : parser) {
                 String storeId = record.get("store_id");
+                
+                // Если магазин уже был загружен, пропускаем (дубликаты по store_id)
+                if (storeMap.containsKey(storeId)) {
+                    continue;
+                }
+                
                 double x = Double.parseDouble(record.get("x"));
                 double y = Double.parseDouble(record.get("y"));
                 LocalTime startTime = LocalTime.parse(record.get("time_window_start"));
                 LocalTime endTime = LocalTime.parse(record.get("time_window_end"));
 
                 Store store = new Store(storeId, x, y, startTime, endTime);
+                storeMap.put(storeId, store);
                 stores.add(store);
             }
         }
@@ -72,7 +80,21 @@ public class DataLoader {
                 double startX = Double.parseDouble(record.get("start_x"));
                 double startY = Double.parseDouble(record.get("start_y"));
 
-                trucks.add(new Truck(truckId, capacity, costPerKm, startX, startY));
+                // Временное окно грузовика (если есть в CSV)
+                LocalTime availStart;
+                LocalTime availEnd;
+                try {
+                    String sStart = record.get("avail_start");
+                    String sEnd = record.get("avail_end");
+                    availStart = LocalTime.parse(sStart);
+                    availEnd = LocalTime.parse(sEnd);
+                } catch (IllegalArgumentException | NullPointerException e) {
+                    // На случай старых файлов без колонок времени – по умолчанию 08:00–18:00
+                    availStart = LocalTime.of(8, 0);
+                    availEnd = LocalTime.of(18, 0);
+                }
+
+                trucks.add(new Truck(truckId, capacity, costPerKm, startX, startY, availStart, availEnd));
             }
         }
 

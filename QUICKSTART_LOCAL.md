@@ -11,7 +11,7 @@ mvn clean package
 ### Терминал 1 - Сервер
 
 ```bash
-java -cp target/jade-delivery-system.jar server.ServerLauncher 1099
+java -cp "target/jade-delivery-system.jar;lib/*" server.ServerLauncher 1099
 ```
 
 **Что происходит:**
@@ -25,12 +25,12 @@ java -cp target/jade-delivery-system.jar server.ServerLauncher 1099
 ### Терминал 2 - Клиент (через 2-3 секунды после сервера)
 
 ```bash
-java -cp target/jade-delivery-system.jar client.ClientLauncher
+java -cp "target/jade-delivery-system.jar;lib/*" client.ClientLauncher
 ```
 
 Или с явными параметрами:
 ```bash
-java -cp target/jade-delivery-system.jar client.ClientLauncher localhost 1099 Client1
+java -cp "target/jade-delivery-system.jar;lib/*" client.ClientLauncher localhost 1099 Client1
 ```
 
 **Что происходит:**

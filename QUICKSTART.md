@@ -7,10 +7,10 @@
 mvn clean package
 
 # Шаг 2: Запустить сервер (терминал 1)
-java -cp target/jade-delivery-system.jar server.ServerLauncher
+java -cp "target/jade-delivery-system.jar;lib/*" server.ServerLauncher
 
 # Шаг 3: Запустить клиент (терминал 2, через 3 сек)
-java -cp target/jade-delivery-system.jar client.ClientLauncher localhost
+java -cp "target/jade-delivery-system.jar;lib/*" client.ClientLauncher localhost
 
 # Шаг 4: Проверить результаты
 cat output/schedule.csv
@@ -25,12 +25,12 @@ cat output/schedule.csv
 **Машина 1 (192.168.1.100) — Сервер:**
 ```bash
 mvn clean package
-java -cp target/jade-delivery-system.jar server.ServerLauncher 1099
+java -cp "target/jade-delivery-system.jar;lib/*" server.ServerLauncher 1099
 ```
 
 **Машина 2 — Клиент:**
 ```bash
-java -cp target/jade-delivery-system.jar client.ClientLauncher 192.168.1.100 1099 Client2
+java -cp "target/jade-delivery-system.jar;lib/*" client.ClientLauncher 192.168.1.100 1099 Client2
 ```
 
 ---
@@ -83,7 +83,7 @@ mvn clean package -DskipTests
 mvn clean
 
 # Использовать другой порт (если 1099 занят)
-java -cp target/jade-delivery-system.jar server.ServerLauncher 1100
+java -cp "target/jade-delivery-system.jar;lib/*" server.ServerLauncher 1100
 ```
 
 ---

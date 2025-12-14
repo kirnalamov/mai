@@ -18,6 +18,9 @@ public class DeliveryRoute implements Serializable {
     private double totalCost;
     private LocalTime departureTime;
     private LocalTime estimatedReturnTime;
+    // Временное окно доступности грузовика на платформе (из данных о машине)
+    private LocalTime truckAvailabilityStart;
+    private LocalTime truckAvailabilityEnd;
 
     public DeliveryRoute(String routeId, String truckId, LocalTime departureTime) {
         this.routeId = routeId;
@@ -93,6 +96,10 @@ public class DeliveryRoute implements Serializable {
     public LocalTime getDepartureTime() { return departureTime; }
     public LocalTime getEstimatedReturnTime() { return estimatedReturnTime; }
     public void setEstimatedReturnTime(LocalTime estimatedReturnTime) { this.estimatedReturnTime = estimatedReturnTime; }
+    public LocalTime getTruckAvailabilityStart() { return truckAvailabilityStart; }
+    public void setTruckAvailabilityStart(LocalTime truckAvailabilityStart) { this.truckAvailabilityStart = truckAvailabilityStart; }
+    public LocalTime getTruckAvailabilityEnd() { return truckAvailabilityEnd; }
+    public void setTruckAvailabilityEnd(LocalTime truckAvailabilityEnd) { this.truckAvailabilityEnd = truckAvailabilityEnd; }
 
     public void addStop(RouteStop stop) {
         stops.add(stop);

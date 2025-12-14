@@ -133,8 +133,16 @@ public class RoutePlanningEngine {
             }
 
             // Если ничего не добавили, пропускаем этот магазин
+            // (возможно, товары не помещаются в грузовик)
             if (stop.getItems().isEmpty()) {
-                remainingDemands.get(nextStoreId).removeAll(delivered);
+                // Удаляем только те заказы, которые были доставлены (если есть)
+                if (!delivered.isEmpty()) {
+                    remainingDemands.get(nextStoreId).removeAll(delivered);
+                    if (remainingDemands.get(nextStoreId).isEmpty()) {
+                        remainingDemands.remove(nextStoreId);
+                    }
+                }
+                // Пропускаем этот магазин и ищем следующий
                 continue;
             }
 

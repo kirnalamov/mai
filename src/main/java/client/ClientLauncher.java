@@ -76,25 +76,41 @@ public class ClientLauncher {
 
             // Загружаем данные
             System.out.println("\nЗагрузка данных...");
+            // Магазины (координаты и временные окна)
             Map<String, Store> stores = loadStores();
+            // Товары
+            Map<String, Product> products = loadProducts();
+            // Потребности магазинов: на каждый магазин может быть несколько товаров
+            Map<String, List<DeliveryRequest>> demands = loadDemands(products);
             System.out.println("✓ Данные загружены");
 
-            // КЛИЕНТ создает ВСЕ магазины (грузовики на сервере)
-            System.out.println("\nСоздание магазинов на клиенте...");
-            List<Store> storeList = new ArrayList<>(stores.values());
-            
+            // КЛИЕНТ создает агентов магазинов: один агент на магазин со всеми потребностями
+            System.out.println("\nСоздание магазинов на клиенте (один агент на магазин со всеми потребностями)...");
             int storeCount = 0;
-            for (Store store : storeList) {
-                Object[] args_store = new Object[]{store};
+            for (Map.Entry<String, List<DeliveryRequest>> entry : demands.entrySet()) {
+                String storeId = entry.getKey();
+                Store store = stores.get(storeId);
+                if (store == null) {
+                    System.err.println("[CLIENT] Магазин из demands не найден в списке магазинов: " + storeId);
+                    continue;
+                }
+                List<DeliveryRequest> storeDemands = entry.getValue();
+                if (storeDemands.isEmpty()) {
+                    continue;
+                }
+                // Создаём один агент на магазин со всеми его потребностями
+                Object[] args_store = new Object[]{store, storeDemands};
+                String agentName = "store_" + storeId;
                 AgentController storeController = remoteContainer.createNewAgent(
-                    "store_" + store.getStoreId(),
+                    agentName,
                     "agents.StoreAgent",
                     args_store
                 );
                 storeController.start();
-                System.out.println("✓ [CLIENT] StoreAgent запущен: store_" + store.getStoreId());
+                System.out.println("✓ [CLIENT] StoreAgent запущен: " + agentName +
+                        " (" + storeDemands.size() + " товаров)");
                 storeCount++;
-                
+
                 // Небольшая задержка для стабильности
                 Thread.sleep(100);
             }
@@ -131,6 +147,29 @@ public class ClientLauncher {
             System.err.println("Ошибка загрузки магазинов: " + e.getMessage());
         }
         return map;
+    }
+
+    private static Map<String, Product> loadProducts() throws IOException {
+        Map<String, Product> map = new HashMap<>();
+        try {
+            List<Product> list = DataLoader.loadProducts("data/products.csv");
+            for (Product p : list) {
+                map.put(p.getProductId(), p);
+            }
+        } catch (IOException e) {
+            System.err.println("Ошибка загрузки товаров: " + e.getMessage());
+        }
+        return map;
+    }
+
+    private static Map<String, List<DeliveryRequest>> loadDemands(Map<String, Product> products) throws IOException {
+        try {
+            // Используем data/stores.csv как источник потребностей (store_id, product_id, demand)
+            return DataLoader.loadDemands("data/stores.csv", products);
+        } catch (IOException e) {
+            System.err.println("Ошибка загрузки потребностей магазинов: " + e.getMessage());
+            return new HashMap<>();
+        }
     }
 
     /**

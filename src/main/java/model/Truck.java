@@ -1,6 +1,7 @@
 package model;
 
 import java.io.Serializable;
+import java.time.LocalTime;
 
 /**
  * Представляет грузовой автомобиль
@@ -15,6 +16,13 @@ public class Truck implements Serializable {
     private double startX;             // координата склада X
     private double startY;             // координата склада Y
 
+    // Временное окно доступности грузовика (например, 08:00–18:00)
+    private LocalTime availabilityStart;
+    private LocalTime availabilityEnd;
+
+    // Время, когда грузовик станет свободен для следующего заказа
+    private LocalTime nextFreeTime;
+
     public Truck() {
     }
 
@@ -25,6 +33,24 @@ public class Truck implements Serializable {
         this.currentLoad = 0;
         this.startX = startX;
         this.startY = startY;
+        // По умолчанию: доступен весь день, nextFreeTime = начало окна
+        this.availabilityStart = LocalTime.of(8, 0);
+        this.availabilityEnd = LocalTime.of(18, 0);
+        this.nextFreeTime = this.availabilityStart;
+    }
+
+    public Truck(String truckId, double capacity, double costPerKm,
+                 double startX, double startY,
+                 LocalTime availabilityStart, LocalTime availabilityEnd) {
+        this.truckId = truckId;
+        this.capacity = capacity;
+        this.costPerKm = costPerKm;
+        this.currentLoad = 0;
+        this.startX = startX;
+        this.startY = startY;
+        this.availabilityStart = availabilityStart;
+        this.availabilityEnd = availabilityEnd;
+        this.nextFreeTime = availabilityStart;
     }
 
     public String getTruckId() {
@@ -75,6 +101,30 @@ public class Truck implements Serializable {
         this.startY = startY;
     }
 
+    public LocalTime getAvailabilityStart() {
+        return availabilityStart;
+    }
+
+    public void setAvailabilityStart(LocalTime availabilityStart) {
+        this.availabilityStart = availabilityStart;
+    }
+
+    public LocalTime getAvailabilityEnd() {
+        return availabilityEnd;
+    }
+
+    public void setAvailabilityEnd(LocalTime availabilityEnd) {
+        this.availabilityEnd = availabilityEnd;
+    }
+
+    public LocalTime getNextFreeTime() {
+        return nextFreeTime;
+    }
+
+    public void setNextFreeTime(LocalTime nextFreeTime) {
+        this.nextFreeTime = nextFreeTime;
+    }
+
     /**
      * Проверяет, достаточно ли свободного места для груза
      */
@@ -110,6 +160,8 @@ public class Truck implements Serializable {
                 ", costPerKm=" + costPerKm +
                 ", currentLoad=" + currentLoad +
                 ", utilization=" + String.format("%.1f%%", (currentLoad / capacity * 100)) +
+                ", availability=" + availabilityStart + "-" + availabilityEnd +
+                ", nextFreeTime=" + nextFreeTime +
                 '}';
     }
 }

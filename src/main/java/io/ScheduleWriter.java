@@ -6,6 +6,7 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.*;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Запись результатов доставки в Excel файл
@@ -51,6 +52,8 @@ public class ScheduleWriter {
         String[] headers = {
                 "Маршрут",
                 "Грузовик",
+                "Окно грузовика (начало)",
+                "Окно грузовика (конец)",
                 "Магазин",
                 "Коорд. X",
                 "Коорд. Y",
@@ -58,8 +61,8 @@ public class ScheduleWriter {
                 "Количество, шт",
                 "Вес партии, т",
                 "Дистанция от предыдущей точки, км",
-                "Прибытие",
                 "Отправление",
+                "Прибытие",
                 "Пробег маршрута, км",
                 "Стоимость маршрута, ₽"
         };
@@ -81,6 +84,12 @@ public class ScheduleWriter {
                     int col = 0;
                     row.createCell(col++).setCellValue(route.getRouteId());
                     row.createCell(col++).setCellValue(route.getTruckId());
+                    row.createCell(col++).setCellValue(
+                            route.getTruckAvailabilityStart() != null ? route.getTruckAvailabilityStart().toString() : "-"
+                    );
+                    row.createCell(col++).setCellValue(
+                            route.getTruckAvailabilityEnd() != null ? route.getTruckAvailabilityEnd().toString() : "-"
+                    );
                     row.createCell(col++).setCellValue(stop.getStoreId());
 
                     Cell coordXCell = row.createCell(col++);
@@ -194,15 +203,19 @@ public class ScheduleWriter {
     }
 
     public static void writeScheduleToCSV(String filename, List<DeliveryRoute> routes) throws IOException {
+        // Используем Locale.US для гарантии использования точки в десятичных числах
         try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
-            writer.println("route_id,truck_id,store_id,store_x,store_y,product_id,quantity,weight_t,distance_from_prev_km,arrival_time,departure_time,route_distance_km,route_cost_rub");
+            writer.println("route_id,truck_id,truck_window_start,truck_window_end,store_id,store_x,store_y,product_id,quantity,weight_t,distance_from_prev_km,arrival_time,departure_time,route_distance_km,route_cost_rub");
 
             for (DeliveryRoute route : routes) {
                 for (DeliveryRoute.RouteStop stop : route.getStops()) {
                     for (DeliveryRoute.DeliveryItem item : stop.getItems()) {
-                        writer.printf("\"%s\",\"%s\",\"%s\",%.2f,%.2f,\"%s\",%d,%.2f,%.2f,\"%s\",\"%s\",%.2f,%.2f%n",
+                        // Используем Locale.US для форматирования чисел с точкой
+                        writer.printf(Locale.US, "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",%.2f,%.2f,\"%s\",%d,%.2f,%.2f,\"%s\",\"%s\",%.2f,%.2f%n",
                                 route.getRouteId(),
                                 escape(route.getTruckId()),
+                                route.getTruckAvailabilityStart() != null ? route.getTruckAvailabilityStart().toString() : "-",
+                                route.getTruckAvailabilityEnd() != null ? route.getTruckAvailabilityEnd().toString() : "-",
                                 escape(stop.getStoreId()),
                                 stop.getX(),
                                 stop.getY(),
@@ -234,8 +247,9 @@ public class ScheduleWriter {
                 }
             }
 
-            writer.printf("# Суммарный пробег: %.2f км%n", totalDistance);
-            writer.printf("# Совокупная стоимость: %.2f ₽%n", totalCost);
+            // Используем Locale.US для форматирования чисел с точкой
+            writer.printf(Locale.US, "# Суммарный пробег: %.2f км%n", totalDistance);
+            writer.printf(Locale.US, "# Совокупная стоимость: %.2f ₽%n", totalCost);
             writer.printf("# Позиций доставлено: %d%n", totalDeliveries);
         }
 
