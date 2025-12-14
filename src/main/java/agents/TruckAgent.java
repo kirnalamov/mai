@@ -620,11 +620,21 @@ public class TruckAgent extends Agent {
             // После завершения маршрута и возврата на базу планируем следующий
             isBusy = false;
             
+            // Убеждаемся, что позиция обновлена на базу (после возврата из executeRoute)
+            // currentX и currentY уже должны быть обновлены в executeRoute, но на всякий случай проверяем
+            if (currentX != truck.getStartX() || currentY != truck.getStartY()) {
+                System.out.println("[" + getLocalName() + "] ⚠ ВНИМАНИЕ: позиция не на базе после выполнения маршрута! Обновляю...");
+                currentX = truck.getStartX();
+                currentY = truck.getStartY();
+            }
+            
             // Проверяем, есть ли еще заказы в очереди
             synchronized (pendingOrders) {
                 if (!pendingOrders.isEmpty()) {
                     System.out.println("[" + getLocalName() + "] 🔄 На базе. Есть новые заказы (" + pendingOrders.size() + 
                             "), планирую следующий маршрут...");
+                    System.out.println("[" + getLocalName() + "] 📍 Позиция на базе: (" + currentX + ", " + currentY + 
+                                     "), nextFreeTime: " + truck.getNextFreeTime());
                     // Планируем следующий маршрут в отдельном потоке
                     new Thread(() -> {
                         try {
@@ -661,6 +671,11 @@ public class TruckAgent extends Agent {
                 currentTime = truck.getAvailabilityStart();
             }
             
+            System.out.println("[" + getLocalName() + "] 📋 Планирование маршрута: текущая позиция (" + currentX + ", " + currentY + 
+                             "), база (" + truck.getStartX() + ", " + truck.getStartY() + 
+                             "), текущее время: " + currentTime + 
+                             ", nextFreeTime: " + truck.getNextFreeTime());
+            
             // Если грузовик не на базе, нужно учесть время возврата на базу и погрузку
             double routeX = currentX;
             double routeY = currentY;
@@ -670,16 +685,36 @@ public class TruckAgent extends Agent {
                         currentX, currentY, truck.getStartX(), truck.getStartY()
                 );
                 int returnTimeSeconds = DistanceCalculator.calculateTravelTime(distanceToBase);
-                currentTime = currentTime.plusSeconds(returnTimeSeconds);
+                LocalTime timeAfterReturn = currentTime.plusSeconds(returnTimeSeconds);
                 // Добавляем время погрузки на базе (10 минут)
                 int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
-                currentTime = currentTime.plusSeconds(loadingTimeSeconds);
+                currentTime = timeAfterReturn.plusSeconds(loadingTimeSeconds);
                 routeX = truck.getStartX();
                 routeY = truck.getStartY();
+                
+                System.out.println("[" + getLocalName() + "] 🚚 Грузовик не на базе: возврат на базу (" + 
+                                 String.format("%.2f", distanceToBase) + " км, " + (returnTimeSeconds / 60) + " мин)" +
+                                 ", прибытие на базу: " + timeAfterReturn + 
+                                 ", готовность после погрузки: " + currentTime);
             } else {
-                // Грузовик на базе - добавляем время погрузки (10 минут)
-                int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
-                currentTime = currentTime.plusSeconds(loadingTimeSeconds);
+                // Грузовик на базе
+                // Если nextFreeTime уже установлен (после предыдущего маршрута), 
+                // то currentTime уже включает время возврата на базу + погрузку
+                // Если nextFreeTime не установлен (первый маршрут), добавляем время погрузки
+                LocalTime savedNextFreeTime = truck.getNextFreeTime();
+                if (savedNextFreeTime == null || currentTime.equals(truck.getAvailabilityStart())) {
+                    // Первый маршрут или грузовик только начал работу - добавляем время погрузки
+                    int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
+                    LocalTime timeAfterLoading = currentTime.plusSeconds(loadingTimeSeconds);
+                    System.out.println("[" + getLocalName() + "] 📦 Грузовик на базе (первый маршрут): погрузка (" + 
+                                     (loadingTimeSeconds / 60) + " мин), готовность: " + timeAfterLoading);
+                    currentTime = timeAfterLoading;
+                } else {
+                    // nextFreeTime уже установлен - это время после возврата на базу и погрузки
+                    // Используем его как текущее время
+                    System.out.println("[" + getLocalName() + "] ✅ Грузовик на базе: используем nextFreeTime (уже включает возврат и погрузку): " + savedNextFreeTime);
+                    currentTime = savedNextFreeTime;
+                }
             }
             
             // Копируем очередь для работы
@@ -877,8 +912,18 @@ public class TruckAgent extends Agent {
             }
             
             // Начинаем с базы - загружаем все товары для маршрута
+            // Убеждаемся, что начинаем с базы (позиция должна быть на базе после предыдущего маршрута)
             double routeX = currentX;
             double routeY = currentY;
+            
+            // Если позиция не на базе, это ошибка - исправляем
+            if (routeX != truck.getStartX() || routeY != truck.getStartY()) {
+                System.out.println("[" + getLocalName() + "] ⚠ ВНИМАНИЕ: позиция не на базе в начале executeRoute! " +
+                                 "Текущая: (" + routeX + ", " + routeY + "), база: (" + 
+                                 truck.getStartX() + ", " + truck.getStartY() + "). Исправляю...");
+                routeX = truck.getStartX();
+                routeY = truck.getStartY();
+            }
             double totalRouteWeight = 0;
             for (PendingOrder order : route) {
                 totalRouteWeight += order.totalWeight;
@@ -891,11 +936,15 @@ public class TruckAgent extends Agent {
             
             List<PendingOrder> executedOrders = new ArrayList<>();
             
+            // Переменная для отслеживания предыдущей позиции (для расчета distanceFromPrevious)
+            double prevX = routeX;
+            double prevY = routeY;
+            
             for (PendingOrder order : route) {
                 
-                // Рассчитываем расстояние
+                // Рассчитываем расстояние от предыдущей позиции (база или предыдущий магазин)
                 double distance = DistanceCalculator.calculateDistance(
-                        routeX, routeY, order.store.getX(), order.store.getY());
+                        prevX, prevY, order.store.getX(), order.store.getY());
                 
                 // Рассчитываем время в пути
                 int travelTimeSeconds = DistanceCalculator.calculateTravelTime(distance);
@@ -980,6 +1029,8 @@ public class TruckAgent extends Agent {
                 // Обновляем позицию и время
                 routeX = order.store.getX();
                 routeY = order.store.getY();
+                prevX = order.store.getX(); // Обновляем предыдущую позицию для следующей итерации
+                prevY = order.store.getY();
                 currentTime = departureFromStore;
                 
                 // Добавляем заказ в список выполненных
@@ -988,15 +1039,26 @@ public class TruckAgent extends Agent {
             
             // Возвращаемся на склад
             if (!executedOrders.isEmpty()) {
+                // currentTime здесь - это время отправления из последнего магазина (departureFromStore)
+                // Рассчитываем расстояние от последнего магазина до базы
                 double distanceToDepot = DistanceCalculator.calculateDistance(
                         routeX, routeY, truck.getStartX(), truck.getStartY());
+                // Время в пути от магазина до базы (должно быть таким же, как от базы до магазина)
                 int returnTimeSeconds = DistanceCalculator.calculateTravelTime(distanceToDepot);
-                LocalTime returnTime = currentTime.plusSeconds(returnTimeSeconds);
-                truck.setNextFreeTime(returnTime);
+                // Время прибытия на базу = время отправления из магазина + время пути до базы
+                LocalTime arrivalAtDepot = currentTime.plusSeconds(returnTimeSeconds);
+                // Учитываем время погрузки на базе (10 минут) после возврата
+                int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
+                // Время готовности к следующему маршруту = прибытие на базу + погрузка
+                LocalTime readyTime = arrivalAtDepot.plusSeconds(loadingTimeSeconds);
+                truck.setNextFreeTime(readyTime);
                 currentX = truck.getStartX();
                 currentY = truck.getStartY();
                 
-                System.out.println("[" + getLocalName() + "] ✓ Маршрут завершён, возвращение на склад в " + returnTime);
+                System.out.println("[" + getLocalName() + "] ✓ Маршрут завершён, отправление из последнего магазина в " + currentTime + 
+                                 ", прибытие на склад в " + arrivalAtDepot + 
+                                 " (путь: " + (returnTimeSeconds / 60) + " мин, расстояние: " + String.format("%.2f", distanceToDepot) + " км)" +
+                                 ", готов к следующему маршруту в " + readyTime + " (после погрузки " + (loadingTimeSeconds / 60) + " мин)");
             }
             
             return executedOrders;
