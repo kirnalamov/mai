@@ -136,7 +136,10 @@ public class TruckAgent extends Agent {
                     MessageTemplate.MatchPerformative(ACLMessage.CFP),
                     MessageTemplate.or(
                             MessageTemplate.MatchPerformative(ACLMessage.ACCEPT_PROPOSAL),
-                            MessageTemplate.MatchPerformative(ACLMessage.REJECT_PROPOSAL)
+                            MessageTemplate.or(
+                                    MessageTemplate.MatchPerformative(ACLMessage.REJECT_PROPOSAL),
+                                    MessageTemplate.MatchPerformative(ACLMessage.INFORM)
+                            )
                     )
             );
             ACLMessage msg = receive(mt);
@@ -149,6 +152,9 @@ public class TruckAgent extends Agent {
                     handleAccept(msg);
                 } else if (msg.getPerformative() == ACLMessage.REJECT_PROPOSAL) {
                     handleReject(msg);
+                } else if (msg.getPerformative() == ACLMessage.INFORM && 
+                          msg.getContent() != null && msg.getContent().startsWith("TRUCK_SCHEDULE_UPDATED:")) {
+                    handleTruckScheduleUpdate(msg);
                 }
             } else {
                 block();
@@ -239,17 +245,36 @@ public class TruckAgent extends Agent {
                 nextFree = availStart;
             }
 
-            // Рассчитываем расстояние от текущей позиции до магазина
+            // Если грузовик не на базе, нужно учесть время возврата на базу и погрузку
+            LocalTime timeAfterReturnToBase = nextFree;
+            double currentPosX = currentX;
+            double currentPosY = currentY;
+            
+            // Если грузовик не на базе, рассчитываем время возврата на базу
+            if (currentX != truck.getStartX() || currentY != truck.getStartY()) {
+                double distanceToBase = DistanceCalculator.calculateDistance(
+                        currentX, currentY, truck.getStartX(), truck.getStartY()
+                );
+                int returnTimeSeconds = DistanceCalculator.calculateTravelTime(distanceToBase);
+                timeAfterReturnToBase = nextFree.plusSeconds(returnTimeSeconds);
+                // Добавляем время погрузки на базе (10 минут)
+                int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
+                timeAfterReturnToBase = timeAfterReturnToBase.plusSeconds(loadingTimeSeconds);
+                currentPosX = truck.getStartX();
+                currentPosY = truck.getStartY();
+            }
+
+            // Рассчитываем расстояние от базы (или текущей позиции, если уже на базе) до магазина
             double distanceToStore = DistanceCalculator.calculateDistance(
-                    currentX, currentY, store.getX(), store.getY()
+                    currentPosX, currentPosY, store.getX(), store.getY()
             );
 
             // Рассчитываем время в пути
             int travelTimeSeconds = DistanceCalculator.calculateTravelTime(distanceToStore);
 
-            // Планируем время с учетом окна МАГАЗИНА, а не только грузовика
-            // Минимальное время выезда - когда грузовик будет свободен
-            LocalTime minDepartureTime = nextFree.isAfter(availStart) ? nextFree : availStart;
+            // Планируем время с учетом окна МАГАЗИНА
+            // Минимальное время выезда - после возврата на базу и погрузки (или когда грузовик будет свободен, если уже на базе)
+            LocalTime minDepartureTime = timeAfterReturnToBase.isAfter(availStart) ? timeAfterReturnToBase : availStart;
             
             // Рассчитываем время прибытия при выезде в минимальное время
             LocalTime arrivalTime = minDepartureTime.plusSeconds(travelTimeSeconds);
@@ -283,8 +308,8 @@ public class TruckAgent extends Agent {
                 return;
             }
 
-            // Рассчитываем время обслуживания (для всех товаров вместе)
-            int serviceTimeSeconds = DistanceCalculator.calculateServiceTime() + (totalQuantity * 60);
+            // Рассчитываем время обслуживания (разгрузка зависит от количества товаров)
+            int serviceTimeSeconds = DistanceCalculator.calculateServiceTime(totalQuantity);
             LocalTime plannedEnd = arrivalTime.plusSeconds(serviceTimeSeconds);
             
             // Проверяем, что обслуживание завершится до конца окна магазина
@@ -312,7 +337,14 @@ public class TruckAgent extends Agent {
             // указывая в предложении точные времена для этой доставки
             ACLMessage reply = msg.createReply();
             reply.setPerformative(ACLMessage.PROPOSE);
-            double estimatedCost = DistanceCalculator.calculateCost(distanceToStore * 2, truck.getCostPerKm()); // туда-обратно
+            
+            // Рассчитываем стоимость: путь туда + обратный путь от магазина до базы * 0.7
+            double distanceFromStoreToBase = DistanceCalculator.calculateDistance(
+                    store.getX(), store.getY(), truck.getStartX(), truck.getStartY()
+            );
+            double estimatedCost = DistanceCalculator.calculateCostWithReturn(
+                    distanceToStore, distanceFromStoreToBase, truck.getCostPerKm()
+            );
             // Формат: OFFER:storeId:productId1:qty1:productId2:qty2:...:cost=...:departure=...:arrival=...:departureFromStore=...
             StringBuilder offerContent = new StringBuilder("OFFER:" + storeId);
             for (int i = 0; i < productIds.size(); i++) {
@@ -418,10 +450,130 @@ public class TruckAgent extends Agent {
                 }
             }
 
-            // Если грузовик свободен, начинаем планирование маршрута
+            // Уведомляем другие грузовики и магазины об изменении расписания
+            notifyOtherTrucks(storeId, totalWeight, totalQuantity);
+            notifyStores(storeId, totalWeight, totalQuantity);
+
+            // Если грузовик свободен, планируем маршрут с задержкой для сбора заказов
             if (!isBusy) {
-                planAndExecuteRoute();
+                new Thread(() -> {
+                    try {
+                        // Задержка для сбора заказов (2 секунды)
+                        Thread.sleep(2000);
+                        planAndExecuteRoute();
+                    } catch (Exception e) {
+                        System.err.println("[" + getLocalName() + "] Ошибка при выполнении маршрута: " + e.getMessage());
+                        e.printStackTrace();
+                        isBusy = false; // Сбрасываем флаг занятости при ошибке
+                    }
+                }).start();
             }
+        }
+        
+        /**
+         * Уведомляет другие грузовики об изменении расписания
+         */
+        private void notifyOtherTrucks(String storeId, double totalWeight, int totalQuantity) {
+            try {
+                DFAgentDescription template = new DFAgentDescription();
+                ServiceDescription sd = new ServiceDescription();
+                sd.setType("service");
+                sd.setName("truck");
+                template.addServices(sd);
+
+                DFAgentDescription[] result = jade.domain.DFService.search(TruckAgent.this, template);
+                if (result.length == 0) {
+                    return;
+                }
+
+                // Формат: TRUCK_SCHEDULE_UPDATED:truckId:storeId:weight:quantity
+                String content = "TRUCK_SCHEDULE_UPDATED:" + truck.getTruckId() + ":" + storeId + ":" + totalWeight + ":" + totalQuantity;
+                
+                for (DFAgentDescription desc : result) {
+                    AID truckAID = desc.getName();
+                    // Не отправляем уведомление самому себе
+                    if (!truckAID.equals(getAID())) {
+                        ACLMessage notification = new ACLMessage(ACLMessage.INFORM);
+                        notification.addReceiver(truckAID);
+                        notification.setContent(content);
+                        send(notification);
+                    }
+                }
+                System.out.println("[" + getLocalName() + "] 📢 Уведомлены другие грузовики об изменении расписания (заказ от " + storeId + ")");
+            } catch (Exception e) {
+                System.err.println("[" + getLocalName() + "] Ошибка при уведомлении других грузовиков: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Уведомляет магазины об изменении расписания грузовика
+         */
+        private void notifyStores(String acceptedStoreId, double totalWeight, int totalQuantity) {
+            try {
+                DFAgentDescription template = new DFAgentDescription();
+                ServiceDescription sd = new ServiceDescription();
+                sd.setType("service");
+                sd.setName("store");
+                template.addServices(sd);
+
+                DFAgentDescription[] result = jade.domain.DFService.search(TruckAgent.this, template);
+                if (result.length == 0) {
+                    return;
+                }
+
+                // Формат: TRUCK_SCHEDULE_CHANGED:truckId:acceptedStoreId:weight:quantity:nextAvailableTime
+                // Рассчитываем примерное время, когда грузовик снова будет доступен
+                LocalTime nextAvailable = truck.getNextFreeTime();
+                if (nextAvailable == null) {
+                    nextAvailable = truck.getAvailabilityStart();
+                }
+                
+                // Приблизительно оцениваем время выполнения заказа (время погрузки + путь + разгрузка)
+                // Это будет уточнено при планировании маршрута
+                int estimatedServiceTime = DistanceCalculator.calculateLoadingTime() + 
+                                         DistanceCalculator.calculateServiceTime(totalQuantity);
+                nextAvailable = nextAvailable.plusSeconds(estimatedServiceTime);
+                
+                String content = "TRUCK_SCHEDULE_CHANGED:" + truck.getTruckId() + ":" + acceptedStoreId + 
+                               ":" + totalWeight + ":" + totalQuantity + ":" + nextAvailable.toString();
+                
+                for (DFAgentDescription desc : result) {
+                    AID storeAID = desc.getName();
+                    // Не уведомляем магазин, который принял заказ (он уже знает)
+                    if (!storeAID.getLocalName().equals("store_" + acceptedStoreId)) {
+                        ACLMessage notification = new ACLMessage(ACLMessage.INFORM);
+                        notification.addReceiver(storeAID);
+                        notification.setContent(content);
+                        send(notification);
+                    }
+                }
+                System.out.println("[" + getLocalName() + "] 📢 Уведомлены магазины об изменении расписания " +
+                                 "(принят заказ от " + acceptedStoreId + ", следующая доступность: " + nextAvailable + ")");
+            } catch (Exception e) {
+                System.err.println("[" + getLocalName() + "] Ошибка при уведомлении магазинов: " + e.getMessage());
+            }
+        }
+        
+        /**
+         * Обрабатывает уведомление об изменении расписания другого грузовика
+         */
+        private void handleTruckScheduleUpdate(ACLMessage msg) {
+            String content = msg.getContent();
+            // Формат: TRUCK_SCHEDULE_UPDATED:truckId:storeId:weight:quantity
+            String[] parts = content.split(":");
+            if (parts.length < 5 || !"TRUCK_SCHEDULE_UPDATED".equals(parts[0])) {
+                return;
+            }
+            
+            String otherTruckId = parts[1];
+            String storeId = parts[2];
+            
+            System.out.println("[" + getLocalName() + "] 📨 Получено уведомление от " + otherTruckId + 
+                    " об изменении расписания (заказ от " + storeId + ")");
+            
+            // Пересчитываем предложения для магазинов, которые ждут ответа
+            // Это будет сделано автоматически при следующем CFP от магазина
+            // Но можно также отправить обновленное предложение, если у нас есть активные предложения
         }
         
         /**
@@ -429,13 +581,16 @@ public class TruckAgent extends Agent {
          */
         private void planAndExecuteRoute() {
             if (isBusy) {
+                System.out.println("[" + getLocalName() + "] Грузовик занят, пропускаю планирование маршрута");
                 return; // Уже выполняем маршрут
             }
             
             synchronized (pendingOrders) {
                 if (pendingOrders.isEmpty()) {
+                    System.out.println("[" + getLocalName() + "] Нет заказов в очереди");
                     return; // Нет заказов
                 }
+                System.out.println("[" + getLocalName() + "] Начинаю планирование маршрута. Заказов в очереди: " + pendingOrders.size());
             }
             
             // Помечаем грузовик как занятый
@@ -445,6 +600,7 @@ public class TruckAgent extends Agent {
             List<PendingOrder> route = planOptimalRoute();
             
             if (route.isEmpty()) {
+                System.out.println("[" + getLocalName() + "] ⚠ Не удалось спланировать маршрут (возможно, все заказы не вписываются в временные окна)");
                 isBusy = false;
                 return;
             }
@@ -452,15 +608,48 @@ public class TruckAgent extends Agent {
             System.out.println("\n[" + getLocalName() + "] === Начинаю выполнение маршрута (" + route.size() + " остановок) ===");
             
             // Выполняем маршрут
-            executeRoute(route);
+            List<PendingOrder> executedOrders = executeRoute(route);
             
-            // После завершения маршрута планируем следующий
+            // Удаляем выполненные заказы из очереди
+            synchronized (pendingOrders) {
+                pendingOrders.removeAll(executedOrders);
+                System.out.println("[" + getLocalName() + "] ✓ Выполнено заказов: " + executedOrders.size() + 
+                        ", осталось в очереди: " + pendingOrders.size());
+            }
+            
+            // После завершения маршрута и возврата на базу планируем следующий
             isBusy = false;
-            planAndExecuteRoute();
+            
+            // Проверяем, есть ли еще заказы в очереди
+            synchronized (pendingOrders) {
+                if (!pendingOrders.isEmpty()) {
+                    System.out.println("[" + getLocalName() + "] 🔄 На базе. Есть новые заказы (" + pendingOrders.size() + 
+                            "), планирую следующий маршрут...");
+                    // Планируем следующий маршрут в отдельном потоке
+                    new Thread(() -> {
+                        try {
+                            // Небольшая задержка для имитации загрузки на базе
+                            Thread.sleep(100);
+                            planAndExecuteRoute();
+                        } catch (Exception e) {
+                            System.err.println("[" + getLocalName() + "] Ошибка при планировании следующего маршрута: " + e.getMessage());
+                            e.printStackTrace();
+                            isBusy = false;
+                        }
+                    }).start();
+                } else {
+                    System.out.println("[" + getLocalName() + "] ✅ Все заказы выполнены. Ожидаю новые заказы на базе.");
+                }
+            }
         }
         
+    // Коэффициент веса для стоимости (0.0 - только время, 1.0 - только стоимость)
+    // 0.3 означает 30% веса на стоимость, 70% на время доставки
+    private static final double COST_WEIGHT = 0.3;
+    private static final double TIME_WEIGHT = 1.0 - COST_WEIGHT;
+    
         /**
-         * Планирует оптимальный маршрут из очереди заказов (жадный алгоритм - ближайший магазин)
+         * Планирует оптимальный маршрут из очереди заказов с учетом стоимости и времени доставки
          */
         private List<PendingOrder> planOptimalRoute() {
             List<PendingOrder> route = new ArrayList<>();
@@ -469,8 +658,27 @@ public class TruckAgent extends Agent {
             if (currentTime == null) {
                 currentTime = truck.getAvailabilityStart();
             }
+            
+            // Если грузовик не на базе, нужно учесть время возврата на базу и погрузку
             double routeX = currentX;
             double routeY = currentY;
+            if (currentX != truck.getStartX() || currentY != truck.getStartY()) {
+                // Грузовик не на базе - возвращаемся на базу и загружаем товары
+                double distanceToBase = DistanceCalculator.calculateDistance(
+                        currentX, currentY, truck.getStartX(), truck.getStartY()
+                );
+                int returnTimeSeconds = DistanceCalculator.calculateTravelTime(distanceToBase);
+                currentTime = currentTime.plusSeconds(returnTimeSeconds);
+                // Добавляем время погрузки на базе (10 минут)
+                int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
+                currentTime = currentTime.plusSeconds(loadingTimeSeconds);
+                routeX = truck.getStartX();
+                routeY = truck.getStartY();
+            } else {
+                // Грузовик на базе - добавляем время погрузки (10 минут)
+                int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
+                currentTime = currentTime.plusSeconds(loadingTimeSeconds);
+            }
             
             // Копируем очередь для работы
             List<PendingOrder> availableOrders = new ArrayList<>();
@@ -478,13 +686,51 @@ public class TruckAgent extends Agent {
                 availableOrders.addAll(pendingOrders);
             }
             
-            // Жадный алгоритм: выбираем ближайший доступный магазин
+            // Оптимизация с учетом стоимости и времени доставки
             while (!availableOrders.isEmpty() && currentTime.isBefore(truck.getAvailabilityEnd())) {
                 PendingOrder bestOrder = null;
-                double minDistance = Double.MAX_VALUE;
+                double bestScore = Double.MAX_VALUE;
                 int bestIndex = -1;
                 
-                // Ищем ближайший доступный магазин
+                // Первый проход: находим максимальные значения для нормализации
+                double maxCost = 0;
+                long maxTimeSeconds = 0;
+                
+                for (PendingOrder order : availableOrders) {
+                    if (currentLoad + order.totalWeight > truck.getCapacity()) {
+                        continue;
+                    }
+                    
+                    double distance = DistanceCalculator.calculateDistance(
+                            routeX, routeY, order.store.getX(), order.store.getY());
+                    // Стоимость: путь туда + обратный путь от магазина до базы * 0.7
+                    double distanceFromStoreToBase = DistanceCalculator.calculateDistance(
+                            order.store.getX(), order.store.getY(), truck.getStartX(), truck.getStartY()
+                    );
+                    double cost = DistanceCalculator.calculateCostWithReturn(distance, distanceFromStoreToBase, truck.getCostPerKm());
+                    int travelTimeSeconds = DistanceCalculator.calculateTravelTime(distance);
+                    LocalTime arrivalTime = currentTime.plusSeconds(travelTimeSeconds);
+                    
+                    if (arrivalTime.isBefore(order.store.getTimeWindowStart())) {
+                        long waitSeconds = java.time.Duration.between(arrivalTime, order.store.getTimeWindowStart()).getSeconds();
+                        travelTimeSeconds += waitSeconds;
+                    } else if (arrivalTime.isAfter(order.store.getTimeWindowEnd())) {
+                        continue;
+                    }
+                    
+                    int serviceTimeSeconds = DistanceCalculator.calculateServiceTime(order.totalQuantity); // Разгрузка зависит от количества товаров
+                    LocalTime departureTime = arrivalTime.plusSeconds(serviceTimeSeconds);
+                    
+                    if (departureTime.isAfter(order.store.getTimeWindowEnd()) || 
+                        departureTime.isAfter(truck.getAvailabilityEnd())) {
+                        continue;
+                    }
+                    
+                    maxCost = Math.max(maxCost, cost);
+                    maxTimeSeconds = Math.max(maxTimeSeconds, travelTimeSeconds);
+                }
+                
+                // Второй проход: выбираем лучший заказ по комбинированному критерию
                 for (int i = 0; i < availableOrders.size(); i++) {
                     PendingOrder order = availableOrders.get(i);
                     
@@ -493,9 +739,34 @@ public class TruckAgent extends Agent {
                         continue;
                     }
                     
-                    // Рассчитываем расстояние
+                    // Рассчитываем расстояние и стоимость
                     double distance = DistanceCalculator.calculateDistance(
                             routeX, routeY, order.store.getX(), order.store.getY());
+                    
+                    // Ищем ближайший следующий заказ для цепочки (без возврата на базу)
+                    double distanceFromStore = Double.MAX_VALUE;
+                    for (PendingOrder nextOrder : availableOrders) {
+                        if (nextOrder == order) continue;
+                        if (currentLoad + order.totalWeight + nextOrder.totalWeight > truck.getCapacity()) continue;
+                        
+                        double distToNext = DistanceCalculator.calculateDistance(
+                                order.store.getX(), order.store.getY(), 
+                                nextOrder.store.getX(), nextOrder.store.getY()
+                        );
+                        if (distToNext < distanceFromStore) {
+                            distanceFromStore = distToNext;
+                        }
+                    }
+                    
+                    // Если не нашли следующий заказ в цепочке, считаем возврат на базу
+                    if (distanceFromStore == Double.MAX_VALUE) {
+                        distanceFromStore = DistanceCalculator.calculateDistance(
+                                order.store.getX(), order.store.getY(), 
+                                truck.getStartX(), truck.getStartY()
+                        );
+                    }
+                    
+                    double cost = DistanceCalculator.calculateCostWithReturn(distance, distanceFromStore, truck.getCostPerKm());
                     
                     // Рассчитываем время прибытия
                     int travelTimeSeconds = DistanceCalculator.calculateTravelTime(distance);
@@ -504,14 +775,16 @@ public class TruckAgent extends Agent {
                     // Проверяем временное окно МАГАЗИНА
                     if (arrivalTime.isBefore(order.store.getTimeWindowStart())) {
                         // Приедем раньше окна - ждем до начала окна магазина
+                        long waitSeconds = java.time.Duration.between(arrivalTime, order.store.getTimeWindowStart()).getSeconds();
+                        travelTimeSeconds += waitSeconds;
                         arrivalTime = order.store.getTimeWindowStart();
                     } else if (arrivalTime.isAfter(order.store.getTimeWindowEnd())) {
                         // Приедем позже окна - пропускаем этот заказ
                         continue;
                     }
                     
-                    // Рассчитываем время обслуживания
-                    int serviceTimeSeconds = DistanceCalculator.calculateServiceTime() + (order.totalQuantity * 60);
+                    // Рассчитываем время обслуживания (разгрузка зависит от количества товаров)
+                    int serviceTimeSeconds = DistanceCalculator.calculateServiceTime(order.totalQuantity);
                     LocalTime departureTime = arrivalTime.plusSeconds(serviceTimeSeconds);
                     
                     // Проверяем, что обслуживание завершится до конца окна магазина
@@ -524,9 +797,15 @@ public class TruckAgent extends Agent {
                         continue;
                     }
                     
-                    // Выбираем ближайший
-                    if (distance < minDistance) {
-                        minDistance = distance;
+                    // Нормализуем значения (избегаем деления на ноль)
+                    double normalizedCost = maxCost > 0 ? cost / maxCost : 0;
+                    double normalizedTime = maxTimeSeconds > 0 ? (double)travelTimeSeconds / maxTimeSeconds : 0;
+                    
+                    // Комбинированный score: меньше = лучше
+                    double score = COST_WEIGHT * normalizedCost + TIME_WEIGHT * normalizedTime;
+                    
+                    if (score < bestScore) {
+                        bestScore = score;
                         bestOrder = order;
                         bestIndex = i;
                     }
@@ -540,8 +819,10 @@ public class TruckAgent extends Agent {
                 route.add(bestOrder);
                 currentLoad += bestOrder.totalWeight;
                 
-                // Обновляем позицию и время
-                int travelTimeSeconds = DistanceCalculator.calculateTravelTime(minDistance);
+                // Обновляем позицию и время (цепочка заказов без возврата на базу)
+                double distance = DistanceCalculator.calculateDistance(
+                        routeX, routeY, bestOrder.store.getX(), bestOrder.store.getY());
+                int travelTimeSeconds = DistanceCalculator.calculateTravelTime(distance);
                 LocalTime arrivalTime = currentTime.plusSeconds(travelTimeSeconds);
                 // Учитываем окно магазина
                 if (arrivalTime.isBefore(bestOrder.store.getTimeWindowStart())) {
@@ -550,7 +831,7 @@ public class TruckAgent extends Agent {
                     // Это не должно произойти, так как мы уже проверили выше, но на всякий случай
                     arrivalTime = bestOrder.store.getTimeWindowStart();
                 }
-                int serviceTimeSeconds = DistanceCalculator.calculateServiceTime() + (bestOrder.totalQuantity * 60);
+                int serviceTimeSeconds = DistanceCalculator.calculateServiceTime(bestOrder.totalQuantity);
                 LocalTime departureTime = arrivalTime.plusSeconds(serviceTimeSeconds);
                 // Убеждаемся, что не выходим за окно магазина
                 if (departureTime.isAfter(bestOrder.store.getTimeWindowEnd())) {
@@ -559,6 +840,10 @@ public class TruckAgent extends Agent {
                 currentTime = departureTime;
                 routeX = bestOrder.store.getX();
                 routeY = bestOrder.store.getY();
+                
+                System.out.println("[" + getLocalName() + "] 📦 Добавлен в цепочку маршрута: " + bestOrder.storeId + 
+                        " (прибытие: " + arrivalTime + ", отправление: " + departureTime + 
+                        ", текущая загрузка: " + currentLoad + "/" + truck.getCapacity() + ")");
                 
                 // Удаляем из доступных
                 availableOrders.remove(bestIndex);
@@ -574,20 +859,30 @@ public class TruckAgent extends Agent {
         
         /**
          * Выполняет запланированный маршрут
+         * @return список успешно выполненных заказов
          */
-        private void executeRoute(List<PendingOrder> route) {
+        private List<PendingOrder> executeRoute(List<PendingOrder> route) {
             LocalTime currentTime = truck.getNextFreeTime();
             if (currentTime == null) {
                 currentTime = truck.getAvailabilityStart();
             }
+            
+            // Начинаем с базы - загружаем все товары для маршрута
             double routeX = currentX;
             double routeY = currentY;
+            double totalRouteWeight = 0;
+            for (PendingOrder order : route) {
+                totalRouteWeight += order.totalWeight;
+            }
+            
+            // Загружаем все товары на базе перед началом маршрута
+            truck.addLoad(totalRouteWeight);
             double currentLoad = truck.getCurrentLoad();
+            System.out.println("[" + getLocalName() + "] 📦 Загружено товаров на базе: " + totalRouteWeight + " т (всего в грузовике: " + currentLoad + " т)");
+            
+            List<PendingOrder> executedOrders = new ArrayList<>();
             
             for (PendingOrder order : route) {
-                // Загружаем товары
-                truck.addLoad(order.totalWeight);
-                currentLoad += order.totalWeight;
                 
                 // Рассчитываем расстояние
                 double distance = DistanceCalculator.calculateDistance(
@@ -607,7 +902,11 @@ public class TruckAgent extends Agent {
                     arrivalTime = order.store.getTimeWindowStart();
                 } else if (minArrivalTime.isAfter(order.store.getTimeWindowEnd())) {
                     // Окно уже прошло, пропускаем этот заказ
+                    System.out.println("[" + getLocalName() + "] ⚠ Пропускаю заказ от " + order.storeId + 
+                            " - временное окно уже прошло (окно: " + order.store.getTimeWindowStart() + 
+                            "-" + order.store.getTimeWindowEnd() + ", прибытие: " + minArrivalTime + ")");
                     truck.removeLoad(order.totalWeight);
+                    // НЕ добавляем в executedOrders, чтобы заказ остался в очереди для следующей попытки
                     continue;
                 } else {
                     // Прибытие в пределах окна - используем рассчитанное время
@@ -626,19 +925,27 @@ public class TruckAgent extends Agent {
                         arrivalTime = order.store.getTimeWindowStart();
                     } else if (arrivalTime.isAfter(order.store.getTimeWindowEnd())) {
                         // Теперь позже окна - пропускаем
+                        System.out.println("[" + getLocalName() + "] ⚠ Пропускаю заказ от " + order.storeId + 
+                                " - временное окно уже прошло (окно: " + order.store.getTimeWindowStart() + 
+                                "-" + order.store.getTimeWindowEnd() + ", прибытие: " + arrivalTime + ")");
                         truck.removeLoad(order.totalWeight);
+                        // НЕ добавляем в executedOrders, чтобы заказ остался в очереди для следующей попытки
                         continue;
                     }
                 }
                 
-                // Время обслуживания
-                int serviceTimeSeconds = DistanceCalculator.calculateServiceTime() + (order.totalQuantity * 60);
+                // Время обслуживания (разгрузка зависит от количества товаров)
+                int serviceTimeSeconds = DistanceCalculator.calculateServiceTime(order.totalQuantity);
                 LocalTime departureFromStore = arrivalTime.plusSeconds(serviceTimeSeconds);
                 
                 // Проверяем, что обслуживание завершится до конца окна магазина
                 if (departureFromStore.isAfter(order.store.getTimeWindowEnd())) {
                     // Не вписывается в окно магазина - пропускаем
+                    System.out.println("[" + getLocalName() + "] ⚠ Пропускаю заказ от " + order.storeId + 
+                            " - обслуживание не вписывается в окно магазина (окно до: " + 
+                            order.store.getTimeWindowEnd() + ", завершение: " + departureFromStore + ")");
                     truck.removeLoad(order.totalWeight);
+                    // НЕ добавляем в executedOrders, чтобы заказ остался в очереди для следующей попытки
                     continue;
                 }
                 
@@ -665,18 +972,25 @@ public class TruckAgent extends Agent {
                 routeX = order.store.getX();
                 routeY = order.store.getY();
                 currentTime = departureFromStore;
+                
+                // Добавляем заказ в список выполненных
+                executedOrders.add(order);
             }
             
             // Возвращаемся на склад
-            double distanceToDepot = DistanceCalculator.calculateDistance(
-                    routeX, routeY, truck.getStartX(), truck.getStartY());
-            int returnTimeSeconds = DistanceCalculator.calculateTravelTime(distanceToDepot);
-            LocalTime returnTime = currentTime.plusSeconds(returnTimeSeconds);
-            truck.setNextFreeTime(returnTime);
-            currentX = truck.getStartX();
-            currentY = truck.getStartY();
+            if (!executedOrders.isEmpty()) {
+                double distanceToDepot = DistanceCalculator.calculateDistance(
+                        routeX, routeY, truck.getStartX(), truck.getStartY());
+                int returnTimeSeconds = DistanceCalculator.calculateTravelTime(distanceToDepot);
+                LocalTime returnTime = currentTime.plusSeconds(returnTimeSeconds);
+                truck.setNextFreeTime(returnTime);
+                currentX = truck.getStartX();
+                currentY = truck.getStartY();
+                
+                System.out.println("[" + getLocalName() + "] ✓ Маршрут завершён, возвращение на склад в " + returnTime);
+            }
             
-            System.out.println("[" + getLocalName() + "] ✓ Маршрут завершён, возвращение на склад в " + returnTime);
+            return executedOrders;
         }
         
         /**
@@ -684,26 +998,35 @@ public class TruckAgent extends Agent {
          */
         private void sendDeliveryReports(PendingOrder order, LocalTime departureTime, 
                                         LocalTime arrivalTime, LocalTime departureFromStore, double distanceFromPrevious) {
+            System.out.println("[" + getLocalName() + "] 📤 Отправляю отчёты о доставке в ScheduleLogger для " + order.productIds.size() + " товаров");
+            
             // Отправляем отчёт логгеру для каждого товара
             for (int i = 0; i < order.productIds.size(); i++) {
                 String productId = order.productIds.get(i);
                 int qty = order.quantities.get(i);
                 
                 ACLMessage logMsg = new ACLMessage(ACLMessage.INFORM);
-                logMsg.addReceiver(new AID("logger", AID.ISLOCALNAME));
+                AID loggerAID = new AID("logger", AID.ISLOCALNAME);
+                logMsg.addReceiver(loggerAID);
+                
                 // Формат времени для логгера: HH.mm (без секунд)
                 java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter.ofPattern("HH.mm");
                 String departureStr = departureTime.format(fmt);
                 String arrivalStr = arrivalTime.format(fmt);
                 String departureFromStoreStr = departureFromStore.format(fmt);
                 // Формат: DELIVERY_COMPLETE:storeId:productId:qty:truckId:departure:arrival:departureFromStore:distanceFromPrevious:prevX:prevY
-                logMsg.setContent("DELIVERY_COMPLETE:" + order.storeId + ":" + productId + ":" + qty + ":" +
+                String content = "DELIVERY_COMPLETE:" + order.storeId + ":" + productId + ":" + qty + ":" +
                         truck.getTruckId() + ":" + departureStr + ":" + arrivalStr + ":" + departureFromStoreStr + ":" +
                         String.format(Locale.US, "%.2f", distanceFromPrevious) + ":" + 
                         String.format(Locale.US, "%.2f", order.store.getX()) + ":" + 
-                        String.format(Locale.US, "%.2f", order.store.getY()));
+                        String.format(Locale.US, "%.2f", order.store.getY());
+                logMsg.setContent(content);
+                
+                System.out.println("[" + getLocalName() + "] → Отправляю в logger (" + loggerAID.getName() + "): " + productId + " x" + qty);
                 send(logMsg);
             }
+            
+            System.out.println("[" + getLocalName() + "] ✓ Все отчёты отправлены в ScheduleLogger");
         }
 
         /**

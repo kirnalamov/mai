@@ -42,9 +42,41 @@ public class DistanceCalculator {
     }
 
     /**
-     * Вычисляет время обслуживания в магазине (минимум 5 минут)
+     * Вычисляет время обслуживания в магазине (разгрузка)
+     * Базовое время 5 минут + 1 минута на каждую единицу товара
+     * @param totalItems общее количество единиц товара для разгрузки
+     * @return время разгрузки в секундах
+     */
+    public static int calculateServiceTime(int totalItems) {
+        // Базовое время 5 минут + 1 минута на каждую единицу товара
+        int baseTimeMinutes = 5;
+        int timePerItemMinutes = 1;
+        return (baseTimeMinutes + totalItems * timePerItemMinutes) * 60;  // в секундах
+    }
+    
+    /**
+     * Вычисляет время обслуживания в магазине (разгрузка - базовое время 5 минут)
+     * Для обратной совместимости
      */
     public static int calculateServiceTime() {
         return 5 * 60;  // 5 минут в секундах
+    }
+    
+    /**
+     * Вычисляет время погрузки на базе (10 минут)
+     */
+    public static int calculateLoadingTime() {
+        return 10 * 60;  // 10 минут в секундах
+    }
+    
+    /**
+     * Вычисляет стоимость доставки с учетом обратного пути
+     * @param distanceToStore расстояние до магазина
+     * @param distanceFromStore расстояние от магазина до следующей точки (или базы)
+     * @param costPerKm стоимость за километр
+     * @return общая стоимость (путь туда + обратный путь * 0.7)
+     */
+    public static double calculateCostWithReturn(double distanceToStore, double distanceFromStore, double costPerKm) {
+        return distanceToStore * costPerKm + distanceFromStore * costPerKm * 0.7;
     }
 }

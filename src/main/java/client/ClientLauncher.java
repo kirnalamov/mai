@@ -177,11 +177,26 @@ public class ClientLauncher {
      */
     private static void waitForCompletion(AgentContainer container, int expectedStores) {
         try {
+            System.out.println("[CLIENT] Ожидание завершения работы агентов...");
+            System.out.println("[CLIENT] Магазины будут договариваться с грузовиками и выполнять доставки...");
+            
             // Ждем достаточно времени для выполнения всех задач
             // (магазины ведут переговоры с грузовиками, грузовики выполняют доставки)
-            Thread.sleep(30000); // 30 секунд должно хватить
+            // Увеличиваем время ожидания, чтобы дать время на переговоры и доставки
+            int waitTimeSeconds = 120; // 2 минуты должно хватить для всех переговоров и доставок
+            System.out.println("[CLIENT] Ожидание " + waitTimeSeconds + " секунд для завершения всех операций...");
+            
+            for (int i = 0; i < waitTimeSeconds; i++) {
+                Thread.sleep(1000); // Спим по 1 секунде, чтобы можно было прервать
+                if (i % 10 == 0 && i > 0) {
+                    System.out.println("[CLIENT] Прошло " + i + " секунд...");
+                }
+            }
+            
+            System.out.println("[CLIENT] Время ожидания истекло. Завершаю работу...");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            System.out.println("[CLIENT] Ожидание прервано");
         }
     }
 }

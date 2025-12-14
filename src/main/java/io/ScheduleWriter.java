@@ -194,17 +194,85 @@ public class ScheduleWriter {
         servedStoresCell.setCellValue(servedStores.size());
         servedStoresCell.setCellStyle(integerStyle);
 
-        try (FileOutputStream fos = new FileOutputStream(filename)) {
+        // Используем временный файл, чтобы избежать проблем с открытыми файлами
+        File targetFile = new File(filename);
+        File tempFile = new File(filename + ".tmp");
+        
+        // Удаляем временный файл, если он существует
+        if (tempFile.exists()) {
+            if (!tempFile.delete()) {
+                System.err.println("Предупреждение: не удалось удалить старый временный файл " + tempFile.getAbsolutePath());
+            }
+        }
+        
+        try (FileOutputStream fos = new FileOutputStream(tempFile)) {
             workbook.write(fos);
+            fos.flush();
         }
 
         workbook.close();
-        System.out.println("Расписание доставки сохранено в: " + filename);
+        
+        // Пытаемся скопировать временный файл в целевой
+        // Если файл открыт в Excel, это может не сработать на Windows
+        boolean copySuccess = false;
+        try (FileInputStream fis = new FileInputStream(tempFile);
+             FileOutputStream fos = new FileOutputStream(targetFile)) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                fos.write(buffer, 0, bytesRead);
+            }
+            fos.flush();
+            copySuccess = true;
+        } catch (IOException e) {
+            // Если не удалось записать в целевой файл (возможно, он открыт в Excel)
+            // Пытаемся записать в файл с другим именем
+            String altFilename = filename.replace(".xlsx", "_new.xlsx");
+            File altFile = new File(altFilename);
+            try (FileInputStream fis = new FileInputStream(tempFile);
+                 FileOutputStream fos = new FileOutputStream(altFile)) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = fis.read(buffer)) != -1) {
+                    fos.write(buffer, 0, bytesRead);
+                }
+                fos.flush();
+                System.err.println("ВНИМАНИЕ: Не удалось записать в " + targetFile.getAbsolutePath() + 
+                                 " (возможно, файл открыт в Excel). Файл сохранен как: " + altFile.getAbsolutePath());
+                targetFile = altFile;
+                copySuccess = true;
+            } catch (IOException e2) {
+                throw new IOException("Не удалось записать файл ни в " + filename + ", ни в " + altFilename + ": " + e2.getMessage(), e2);
+            }
+        }
+        
+        // Удаляем временный файл
+        if (tempFile.exists() && !tempFile.delete()) {
+            System.err.println("Предупреждение: не удалось удалить временный файл " + tempFile.getAbsolutePath());
+        }
+        
+        // Проверяем, что файл действительно создан
+        if (copySuccess && targetFile.exists() && targetFile.length() > 0) {
+            System.out.println("Расписание доставки сохранено в: " + targetFile.getAbsolutePath() + " (размер: " + targetFile.length() + " байт)");
+        } else {
+            throw new IOException("Файл не был создан или пустой: " + targetFile.getAbsolutePath());
+        }
     }
 
     public static void writeScheduleToCSV(String filename, List<DeliveryRoute> routes) throws IOException {
+        // Используем временный файл, чтобы избежать проблем с открытыми файлами
+        File targetFile = new File(filename);
+        File tempFile = new File(filename + ".tmp");
+        
+        // Удаляем временный файл, если он существует
+        if (tempFile.exists()) {
+            if (!tempFile.delete()) {
+                System.err.println("Предупреждение: не удалось удалить старый временный файл " + tempFile.getAbsolutePath());
+            }
+        }
+        
         // Используем Locale.US для гарантии использования точки в десятичных числах
-        try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+        try (PrintWriter writer = new PrintWriter(new FileWriter(tempFile, false))) {
             writer.println("route_id,truck_id,truck_window_start,truck_window_end,store_id,store_x,store_y,product_id,quantity,weight_t,distance_from_prev_km,arrival_time,departure_time,route_distance_km,route_cost_rub");
 
             for (DeliveryRoute route : routes) {
@@ -251,9 +319,56 @@ public class ScheduleWriter {
             writer.printf(Locale.US, "# Суммарный пробег: %.2f км%n", totalDistance);
             writer.printf(Locale.US, "# Совокупная стоимость: %.2f ₽%n", totalCost);
             writer.printf("# Позиций доставлено: %d%n", totalDeliveries);
+            
+            // Явно вызываем flush перед закрытием
+            writer.flush();
+        }
+        
+        // Пытаемся скопировать временный файл в целевой
+        // Если файл открыт в Excel, это может не сработать на Windows
+        boolean copySuccess = false;
+        try (FileInputStream fis = new FileInputStream(tempFile);
+             FileOutputStream fos = new FileOutputStream(targetFile)) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                fos.write(buffer, 0, bytesRead);
+            }
+            fos.flush();
+            copySuccess = true;
+        } catch (IOException e) {
+            // Если не удалось записать в целевой файл (возможно, он открыт в Excel)
+            // Пытаемся записать в файл с другим именем
+            String altFilename = filename.replace(".csv", "_new.csv");
+            File altFile = new File(altFilename);
+            try (FileInputStream fis = new FileInputStream(tempFile);
+                 FileOutputStream fos = new FileOutputStream(altFile)) {
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = fis.read(buffer)) != -1) {
+                    fos.write(buffer, 0, bytesRead);
+                }
+                fos.flush();
+                System.err.println("ВНИМАНИЕ: Не удалось записать в " + targetFile.getAbsolutePath() + 
+                                 " (возможно, файл открыт в Excel). Файл сохранен как: " + altFile.getAbsolutePath());
+                targetFile = altFile;
+                copySuccess = true;
+            } catch (IOException e2) {
+                throw new IOException("Не удалось записать файл ни в " + filename + ", ни в " + altFilename + ": " + e2.getMessage(), e2);
+            }
+        }
+        
+        // Удаляем временный файл
+        if (tempFile.exists() && !tempFile.delete()) {
+            System.err.println("Предупреждение: не удалось удалить временный файл " + tempFile.getAbsolutePath());
         }
 
-        System.out.println("Расписание доставки сохранено в: " + filename);
+        // Проверяем, что файл действительно создан
+        if (copySuccess && targetFile.exists() && targetFile.length() > 0) {
+            System.out.println("Расписание доставки сохранено в: " + targetFile.getAbsolutePath() + " (размер: " + targetFile.length() + " байт)");
+        } else {
+            throw new IOException("Файл не был создан или пустой: " + targetFile.getAbsolutePath());
+        }
     }
 
     private static String escape(String value) {

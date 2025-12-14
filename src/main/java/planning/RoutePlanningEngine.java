@@ -73,13 +73,19 @@ public class RoutePlanningEngine {
         double currentX = truck.getStartX();
         double currentY = truck.getStartY();
         LocalTime currentTime = departureTime;
+        
+        // Добавляем время погрузки на базе (10 минут) перед началом маршрута
+        int loadingTimeSeconds = DistanceCalculator.calculateLoadingTime();
+        currentTime = currentTime.plusSeconds(loadingTimeSeconds);
+        
         double currentLoad = 0;
         double totalDistance = 0;
 
-        // Жадный алгоритм: выбираем ближайший доступный магазин
+        // Оптимизация с учетом стоимости и времени доставки
         while (true) {
             String nextStoreId = findNearestStore(
                 currentX, currentY, currentTime, currentLoad, truck.getCapacity(),
+                truck.getCostPerKm(), truck.getStartX(), truck.getStartY(),
                 storesMap, productsMap, remainingDemands
             );
 
@@ -146,8 +152,9 @@ public class RoutePlanningEngine {
                 continue;
             }
 
-            // Время обслуживания
-            int serviceTime = stop.getItems().size() * DistanceCalculator.calculateServiceTime();
+            // Время обслуживания (разгрузка зависит от количества товаров)
+            int totalItems = stop.getItems().stream().mapToInt(DeliveryRoute.DeliveryItem::getQuantity).sum();
+            int serviceTime = DistanceCalculator.calculateServiceTime(totalItems);
             LocalTime departTime = arrivalTime.plusSeconds(serviceTime);
             stop.setDepartureTime(departTime);
 
@@ -166,8 +173,9 @@ public class RoutePlanningEngine {
         }
 
         // Возврат на склад
+        double distanceToDepot = 0;
         if (!route.getStops().isEmpty()) {
-            double distanceToDepot = DistanceCalculator.calculateDistance(
+            distanceToDepot = DistanceCalculator.calculateDistance(
                 currentX, currentY, truck.getStartX(), truck.getStartY()
             );
             totalDistance += distanceToDepot;
@@ -178,24 +186,46 @@ public class RoutePlanningEngine {
         }
 
         route.setTotalDistance(totalDistance);
-        route.setTotalCost(DistanceCalculator.calculateCost(totalDistance, truck.getCostPerKm()));
+        
+        // Рассчитываем стоимость с учетом обратного пути * 0.7
+        if (!route.getStops().isEmpty() && distanceToDepot > 0) {
+            // Стоимость = путь туда (все расстояния между точками) + обратный путь от последней точки до базы * 0.7
+            double forwardDistance = totalDistance - distanceToDepot; // Расстояние без обратного пути
+            double cost = DistanceCalculator.calculateCostWithReturn(forwardDistance, distanceToDepot, truck.getCostPerKm());
+            route.setTotalCost(cost);
+        } else {
+            route.setTotalCost(0);
+        }
 
         return route;
     }
 
     /**
-     * Находит ближайший доступный магазин
+     * Коэффициент веса для стоимости (0.0 - только время, 1.0 - только стоимость)
+     * 0.3 означает 30% веса на стоимость, 70% на время доставки
+     */
+    private static final double COST_WEIGHT = 0.3;
+    private static final double TIME_WEIGHT = 1.0 - COST_WEIGHT;
+
+    /**
+     * Находит оптимальный магазин с учетом стоимости и времени доставки
      */
     private static String findNearestStore(
             double currentX, double currentY,
             LocalTime currentTime, double currentLoad, double capacity,
+            double costPerKm, double depotX, double depotY,
             Map<String, Store> storesMap,
             Map<String, Product> productsMap,
             Map<String, List<DeliveryRequest>> remainingDemands) {
 
-        String nearestStoreId = null;
-        double nearestDistance = Double.MAX_VALUE;
-
+        String bestStoreId = null;
+        double bestScore = Double.MAX_VALUE;
+        
+        // Для нормализации находим максимальные значения стоимости и времени
+        double maxCost = 0;
+        long maxTimeSeconds = 0;
+        
+        // Первый проход: находим максимальные значения для нормализации
         for (Map.Entry<String, List<DeliveryRequest>> entry : remainingDemands.entrySet()) {
             if (entry.getValue().isEmpty()) continue;
 
@@ -215,13 +245,75 @@ public class RoutePlanningEngine {
             double distance = DistanceCalculator.calculateDistance(
                 currentX, currentY, store.getX(), store.getY()
             );
+            
+            // Стоимость: путь туда + обратный путь от магазина до базы * 0.7
+            double distanceFromStoreToBase = DistanceCalculator.calculateDistance(
+                    store.getX(), store.getY(), depotX, depotY
+            );
+            double cost = DistanceCalculator.calculateCostWithReturn(distance, distanceFromStoreToBase, costPerKm);
+            int travelTimeSeconds = DistanceCalculator.calculateTravelTime(distance);
+            LocalTime arrivalTime = currentTime.plusSeconds(travelTimeSeconds);
+            
+            // Учитываем ожидание до начала окна магазина
+            if (arrivalTime.isBefore(store.getTimeWindowStart())) {
+                long waitSeconds = java.time.Duration.between(arrivalTime, store.getTimeWindowStart()).getSeconds();
+                travelTimeSeconds += waitSeconds;
+            }
+            
+            maxCost = Math.max(maxCost, cost);
+            maxTimeSeconds = Math.max(maxTimeSeconds, travelTimeSeconds);
+        }
+        
+        // Второй проход: выбираем лучший магазин по комбинированному критерию
+        for (Map.Entry<String, List<DeliveryRequest>> entry : remainingDemands.entrySet()) {
+            if (entry.getValue().isEmpty()) continue;
 
-            if (distance < nearestDistance) {
-                nearestDistance = distance;
-                nearestStoreId = storeId;
+            String storeId = entry.getKey();
+            Store store = storesMap.get(storeId);
+
+            // Проверяем, есть ли место для товаров
+            double requiredLoad = 0;
+            for (DeliveryRequest req : entry.getValue()) {
+                requiredLoad += req.getTotalWeight();
+            }
+
+            if (currentLoad + requiredLoad > capacity) {
+                continue;  // Нет места в грузовике
+            }
+
+            double distance = DistanceCalculator.calculateDistance(
+                currentX, currentY, store.getX(), store.getY()
+            );
+            
+            // Рассчитываем стоимость: путь туда + обратный путь от магазина до базы * 0.7
+            double distanceFromStoreToBase = DistanceCalculator.calculateDistance(
+                    store.getX(), store.getY(), depotX, depotY
+            );
+            double cost = DistanceCalculator.calculateCostWithReturn(distance, distanceFromStoreToBase, costPerKm);
+            
+            // Рассчитываем время доставки
+            int travelTimeSeconds = DistanceCalculator.calculateTravelTime(distance);
+            LocalTime arrivalTime = currentTime.plusSeconds(travelTimeSeconds);
+            
+            // Учитываем ожидание до начала окна магазина
+            if (arrivalTime.isBefore(store.getTimeWindowStart())) {
+                long waitSeconds = java.time.Duration.between(arrivalTime, store.getTimeWindowStart()).getSeconds();
+                travelTimeSeconds += waitSeconds;
+            }
+            
+            // Нормализуем значения (избегаем деления на ноль)
+            double normalizedCost = maxCost > 0 ? cost / maxCost : 0;
+            double normalizedTime = maxTimeSeconds > 0 ? (double)travelTimeSeconds / maxTimeSeconds : 0;
+            
+            // Комбинированный score: меньше = лучше
+            double score = COST_WEIGHT * normalizedCost + TIME_WEIGHT * normalizedTime;
+
+            if (score < bestScore) {
+                bestScore = score;
+                bestStoreId = storeId;
             }
         }
 
-        return nearestStoreId;
+        return bestStoreId;
     }
 }

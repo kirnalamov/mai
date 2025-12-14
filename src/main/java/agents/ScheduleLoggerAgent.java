@@ -66,8 +66,12 @@ public class ScheduleLoggerAgent extends Agent {
             ACLMessage msg = receive();
             if (msg != null) {
                 String content = msg.getContent();
+                System.out.println("[ScheduleLogger] Получено сообщение от " + msg.getSender().getName() + ": " + content);
                 if (content != null && content.startsWith("DELIVERY_COMPLETE:")) {
+                    System.out.println("[ScheduleLogger] ✓ Обрабатываю сообщение о доставке");
                     handleDeliveryComplete(content);
+                } else {
+                    System.out.println("[ScheduleLogger] ⚠ Игнорирую сообщение (не DELIVERY_COMPLETE): " + content);
                 }
             } else {
                 block();
@@ -225,10 +229,8 @@ public class ScheduleLoggerAgent extends Agent {
                     double dist = stop.getDistanceFromPreviousStop();
                     int travelTimeSeconds = DistanceCalculator.calculateTravelTime(dist);
                     LocalTime arrival = departureTime.plusSeconds(travelTimeSeconds);
-                    int serviceTimeSeconds = DistanceCalculator.calculateServiceTime() + (quantity * 60);
-                    LocalTime departure = arrival.plusSeconds(serviceTimeSeconds);
+                    // Время разгрузки будет пересчитано после добавления товара
                     stop.setArrivalTime(arrival);
-                    stop.setDepartureTime(departure);
                 }
                 
                 route.addStop(stop);
@@ -237,6 +239,14 @@ public class ScheduleLoggerAgent extends Agent {
             // Добавляем товар в остановку
             DeliveryRoute.DeliveryItem item = new DeliveryRoute.DeliveryItem(productId, quantity, totalWeight);
             stop.addItem(item);
+            
+            // Пересчитываем время разгрузки с учетом всех товаров в остановке
+            if (stop.getArrivalTime() != null && stop.getDepartureTime() == null) {
+                int totalItems = stop.getItems().stream().mapToInt(DeliveryRoute.DeliveryItem::getQuantity).sum();
+                int serviceTimeSeconds = DistanceCalculator.calculateServiceTime(totalItems);
+                LocalTime departure = stop.getArrivalTime().plusSeconds(serviceTimeSeconds);
+                stop.setDepartureTime(departure);
+            }
             
             // Пересчитываем общее расстояние маршрута (накопительно)
             double totalRouteDistance = 0.0;
@@ -277,16 +287,35 @@ public class ScheduleLoggerAgent extends Agent {
             // Каждый раз перезаписываем актуальный отчёт
             try {
                 File outDir = new File("output");
-                if (!outDir.exists() && !outDir.mkdirs()) {
-                    System.err.println("[ScheduleLogger] Не удалось создать директорию output");
+                if (!outDir.exists()) {
+                    boolean created = outDir.mkdirs();
+                    if (!created) {
+                        System.err.println("[ScheduleLogger] ❌ Не удалось создать директорию output: " + outDir.getAbsolutePath());
+                        return;
+                    } else {
+                        System.out.println("[ScheduleLogger] ✓ Создана директория output: " + outDir.getAbsolutePath());
+                    }
                 }
 
-                System.out.println("[ScheduleLogger] Пишу расписание. Всего маршрутов: " + routes.size());
-                ScheduleWriter.writeScheduleToCSV("output/schedule.csv", routes);
-                ScheduleWriter.writeScheduleToExcel("output/schedule.xlsx", routes);
-                System.out.println("[ScheduleLogger] Расписание обновлено в output/schedule.csv и output/schedule.xlsx");
+                System.out.println("[ScheduleLogger] 📝 Пишу расписание. Всего маршрутов: " + routes.size());
+                if (routes.isEmpty()) {
+                    System.out.println("[ScheduleLogger] ⚠ ПРЕДУПРЕЖДЕНИЕ: нет маршрутов для записи! Возможно, агенты не договорились о доставках.");
+                    System.out.println("[ScheduleLogger] ⚠ Проверьте логи StoreAgent и TruckAgent на наличие ошибок договоренности.");
+                } else {
+                    System.out.println("[ScheduleLogger] Записываю CSV файл...");
+                    ScheduleWriter.writeScheduleToCSV("output/schedule.csv", routes);
+                    System.out.println("[ScheduleLogger] Записываю Excel файл...");
+                    ScheduleWriter.writeScheduleToExcel("output/schedule.xlsx", routes);
+                    System.out.println("[ScheduleLogger] ✓✓✓ Расписание успешно обновлено в output/schedule.csv и output/schedule.xlsx");
+                }
             } catch (IOException e) {
-                System.err.println("[ScheduleLogger] Ошибка записи отчёта: " + e.getMessage());
+                System.err.println("[ScheduleLogger] ❌ ОШИБКА записи отчёта: " + e.getMessage());
+                System.err.println("[ScheduleLogger] Полный стек ошибки:");
+                e.printStackTrace();
+            } catch (Exception e) {
+                System.err.println("[ScheduleLogger] ❌ Неожиданная ошибка при записи отчёта: " + e.getMessage());
+                System.err.println("[ScheduleLogger] Полный стек ошибки:");
+                e.printStackTrace();
             }
         }
     }
