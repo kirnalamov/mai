@@ -644,9 +644,11 @@ public class TruckAgent extends Agent {
         }
         
     // Коэффициент веса для стоимости (0.0 - только время, 1.0 - только стоимость)
-    // 0.3 означает 30% веса на стоимость, 70% на время доставки
-    private static final double COST_WEIGHT = 0.3;
+    // 0.1 означает 10% веса на стоимость, 90% на время доставки (время имеет больший вес)
+    private static final double COST_WEIGHT = 0.1;
     private static final double TIME_WEIGHT = 1.0 - COST_WEIGHT;
+    // Коэффициент для увеличения веса времени доставки
+    private static final double TIME_MULTIPLIER = 2.0;
     
         /**
          * Планирует оптимальный маршрут из очереди заказов с учетом стоимости и времени доставки
@@ -726,8 +728,11 @@ public class TruckAgent extends Agent {
                         continue;
                     }
                     
+                    // Учитываем время разгрузки при расчете общего времени для нормализации
+                    long totalTimeSeconds = travelTimeSeconds + serviceTimeSeconds;
+                    
                     maxCost = Math.max(maxCost, cost);
-                    maxTimeSeconds = Math.max(maxTimeSeconds, travelTimeSeconds);
+                    maxTimeSeconds = Math.max(maxTimeSeconds, totalTimeSeconds);
                 }
                 
                 // Второй проход: выбираем лучший заказ по комбинированному критерию
@@ -797,12 +802,16 @@ public class TruckAgent extends Agent {
                         continue;
                     }
                     
+                    // Учитываем время разгрузки при расчете общего времени для нормализации
+                    long totalTimeSeconds = travelTimeSeconds + serviceTimeSeconds;
+                    
                     // Нормализуем значения (избегаем деления на ноль)
                     double normalizedCost = maxCost > 0 ? cost / maxCost : 0;
-                    double normalizedTime = maxTimeSeconds > 0 ? (double)travelTimeSeconds / maxTimeSeconds : 0;
+                    double normalizedTime = maxTimeSeconds > 0 ? (double)totalTimeSeconds / maxTimeSeconds : 0;
                     
                     // Комбинированный score: меньше = лучше
-                    double score = COST_WEIGHT * normalizedCost + TIME_WEIGHT * normalizedTime;
+                    // Время доставки домножается на коэффициент для увеличения веса
+                    double score = COST_WEIGHT * normalizedCost + TIME_WEIGHT * normalizedTime * TIME_MULTIPLIER;
                     
                     if (score < bestScore) {
                         bestScore = score;
