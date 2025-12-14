@@ -31,6 +31,23 @@ public class StoreAgent extends Agent {
     private String acceptedTruckId = null; // ID грузовика, которому отправлен ACCEPT
     private long lastCfpTime = 0; // Время последней отправки CFP
     private static final long CFP_RETRY_INTERVAL = 5000; // Интервал повторной отправки CFP (5 секунд)
+    // Список предложений от грузовиков для выбора самого дешевого
+    private List<ProposalInfo> pendingProposals = new ArrayList<>();
+    private long proposalCollectionDeadline = 0; // Время окончания сбора предложений
+    private static final long PROPOSAL_COLLECTION_TIMEOUT = 3000; // Время ожидания предложений (3 секунды)
+    
+    // Класс для хранения информации о предложении
+    private static class ProposalInfo {
+        ACLMessage message;
+        double cost;
+        String truckId;
+        
+        ProposalInfo(ACLMessage msg, double cost, String truckId) {
+            this.message = msg;
+            this.cost = cost;
+            this.truckId = truckId;
+        }
+    }
 
     @Override
     protected void setup() {
@@ -92,18 +109,28 @@ public class StoreAgent extends Agent {
             if (!cfpSent && !orderAccepted) {
                 sendCfpToTrucks();
                 cfpSent = true;
+                // Устанавливаем дедлайн для сбора предложений
+                proposalCollectionDeadline = System.currentTimeMillis() + PROPOSAL_COLLECTION_TIMEOUT;
+                pendingProposals.clear(); // Очищаем старые предложения
+            }
+
+            // Проверяем, не пора ли выбрать самое дешевое предложение
+            long currentTime = System.currentTimeMillis();
+            if (proposalCollectionDeadline > 0 && currentTime >= proposalCollectionDeadline && !pendingProposals.isEmpty() && !waitingForDelivery) {
+                selectBestProposal();
+                proposalCollectionDeadline = 0; // Сбрасываем дедлайн
             }
 
             // Если заказ не принят и прошло достаточно времени - повторяем отправку CFP
             // НО только если не ожидаем доставку от уже принятого грузовика
             if (!orderAccepted && cfpSent && !waitingForDelivery) {
-                long currentTime = System.currentTimeMillis();
                 if (currentTime - lastCfpTime > CFP_RETRY_INTERVAL) {
                     // Проверяем, есть ли не доставленные товары
                     boolean hasPending = false;
                     for (DeliveryRequest req : demands) {
                         int delivered = deliveredProducts.getOrDefault(req.getProductId(), 0);
-                        if (delivered < req.getQuantity()) {
+                        int ordered = orderedProducts.getOrDefault(req.getProductId(), 0);
+                        if (delivered + ordered < req.getQuantity()) {
                             hasPending = true;
                             break;
                         }
@@ -112,6 +139,9 @@ public class StoreAgent extends Agent {
                         System.out.println("[" + getLocalName() + "] Заказ не принят, повторяю отправку CFP...");
                         sendCfpToTrucks();
                         lastCfpTime = currentTime;
+                        // Устанавливаем новый дедлайн для сбора предложений
+                        proposalCollectionDeadline = currentTime + PROPOSAL_COLLECTION_TIMEOUT;
+                        pendingProposals.clear(); // Очищаем старые предложения
                     }
                 }
             }
@@ -256,7 +286,7 @@ public class StoreAgent extends Agent {
 
         /**
          * Обработка предложения от грузовика.
-         * Принимаем первое подходящее и отклоняем остальные.
+         * Сохраняем предложение для последующего выбора самого дешевого.
          */
         private void handleProposal(ACLMessage msg) {
             if (orderAccepted) {
@@ -299,9 +329,98 @@ public class StoreAgent extends Agent {
                 return;
             }
             
-            // Принимаем предложение, отправляем только не доставленные И не заказанные товары
-            // ВАЖНО: проверяем еще раз перед отправкой ACCEPT, что товары действительно не доставлены и не заказаны
-            ACLMessage accept = msg.createReply();
+            // Парсим предложение и извлекаем стоимость
+            String content = msg.getContent();
+            String truckId = msg.getSender().getLocalName();
+            double cost = Double.MAX_VALUE;
+            
+            // Формат: OFFER:storeId:productId1:qty1:productId2:qty2:...:cost=...:departure=...:arrival=...:departureFromStore=...
+            try {
+                String[] parts = content.split(":");
+                for (String part : parts) {
+                    if (part.startsWith("cost=")) {
+                        cost = Double.parseDouble(part.substring(5));
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("[" + getLocalName() + "] Ошибка парсинга стоимости из предложения: " + content);
+                // Если не удалось распарсить стоимость, отклоняем предложение
+                ACLMessage reject = msg.createReply();
+                reject.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                reject.setContent("DELIVERY_REJECTED:" + store.getStoreId() + ":INVALID_OFFER");
+                send(reject);
+                return;
+            }
+            
+            // Сохраняем предложение для последующего выбора
+            pendingProposals.add(new ProposalInfo(msg, cost, truckId));
+            System.out.println("[" + getLocalName() + "] ✓ Получено предложение от " + truckId + " со стоимостью " + cost + 
+                    " (всего предложений: " + pendingProposals.size() + ")");
+            
+            // Если время сбора предложений истекло, сразу выбираем лучшее
+            long currentTime = System.currentTimeMillis();
+            if (proposalCollectionDeadline > 0 && currentTime >= proposalCollectionDeadline) {
+                selectBestProposal();
+                proposalCollectionDeadline = 0;
+            }
+        }
+        
+        /**
+         * Выбирает самое дешевое предложение из всех полученных и принимает его.
+         * Остальные предложения отклоняются.
+         */
+        private void selectBestProposal() {
+            if (pendingProposals.isEmpty()) {
+                return;
+            }
+            
+            // Проверяем еще раз, есть ли не доставленные товары
+            boolean hasPending = false;
+            for (DeliveryRequest req : demands) {
+                int delivered = deliveredProducts.getOrDefault(req.getProductId(), 0);
+                int ordered = orderedProducts.getOrDefault(req.getProductId(), 0);
+                if (delivered + ordered < req.getQuantity()) {
+                    hasPending = true;
+                    break;
+                }
+            }
+            
+            if (!hasPending) {
+                // Все товары уже доставлены - отклоняем все предложения
+                for (ProposalInfo proposal : pendingProposals) {
+                    ACLMessage reject = proposal.message.createReply();
+                    reject.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                    reject.setContent("DELIVERY_REJECTED:" + store.getStoreId() + ":ALL_DELIVERED");
+                    send(reject);
+                }
+                pendingProposals.clear();
+                orderAccepted = true;
+                return;
+            }
+            
+            // Находим самое дешевое предложение
+            ProposalInfo bestProposal = null;
+            double minCost = Double.MAX_VALUE;
+            
+            for (ProposalInfo proposal : pendingProposals) {
+                if (proposal.cost < minCost) {
+                    minCost = proposal.cost;
+                    bestProposal = proposal;
+                }
+            }
+            
+            if (bestProposal == null) {
+                System.err.println("[" + getLocalName() + "] Не удалось найти лучшее предложение");
+                pendingProposals.clear();
+                return;
+            }
+            
+            System.out.println("[" + getLocalName() + "] 🎯 Выбрано самое дешевое предложение от " + bestProposal.truckId + 
+                    " со стоимостью " + minCost + " (всего было " + pendingProposals.size() + " предложений)");
+            
+            // Принимаем лучшее предложение
+            ACLMessage accept = bestProposal.message.createReply();
             accept.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
             // Формат: DELIVERY_ACCEPTED:storeId:productId1:qty1:productId2:qty2:...
             StringBuilder content = new StringBuilder("DELIVERY_ACCEPTED:" + store.getStoreId());
@@ -319,13 +438,6 @@ public class StoreAgent extends Agent {
             }
             
             if (pendingCount > 0) {
-                String truckId = msg.getSender().getLocalName();
-                // Проверяем, не отправляли ли мы уже ACCEPT этому грузовику
-                if (waitingForDelivery && acceptedTruckId != null && acceptedTruckId.equals(truckId)) {
-                    System.out.println("[" + getLocalName() + "] ⚠ Уже отправлен ACCEPT грузовику " + truckId + ", игнорирую повторное предложение");
-                    return; // Игнорируем повторное предложение от того же грузовика
-                }
-                
                 accept.setContent(content.toString());
                 send(accept);
                 // Обновляем счетчик заказанных товаров
@@ -333,20 +445,35 @@ public class StoreAgent extends Agent {
                     orderedProducts.put(entry.getKey(), orderedProducts.getOrDefault(entry.getKey(), 0) + entry.getValue());
                 }
                 waitingForDelivery = true; // Блокируем принятие других предложений до получения уведомления о доставке
-                acceptedTruckId = truckId; // Запоминаем, какому грузовику отправили ACCEPT
+                acceptedTruckId = bestProposal.truckId; // Запоминаем, какому грузовику отправили ACCEPT
                 cfpSent = false; // Сбрасываем флаг, чтобы не отправлять CFP пока ждем доставку
-                System.out.println("[" + getLocalName() + "] → Принято предложение грузовика " + truckId + 
-                        " (" + pendingCount + " товаров). Ожидаю доставку...");
+                System.out.println("[" + getLocalName() + "] → Принято предложение грузовика " + bestProposal.truckId + 
+                        " (" + pendingCount + " товаров, стоимость: " + minCost + "). Ожидаю доставку...");
             } else {
                 // Все товары уже доставлены (возможно, доставка произошла между проверкой и отправкой ACCEPT)
                 orderAccepted = true;
                 waitingForDelivery = false;
-                ACLMessage reject = msg.createReply();
+                ACLMessage reject = bestProposal.message.createReply();
                 reject.setPerformative(ACLMessage.REJECT_PROPOSAL);
                 reject.setContent("DELIVERY_REJECTED:" + store.getStoreId() + ":ALL_DELIVERED");
                 send(reject);
                 System.out.println("[" + getLocalName() + "] → Отклонено предложение - все товары уже доставлены (проверка перед отправкой ACCEPT)");
             }
+            
+            // Отклоняем все остальные предложения
+            for (ProposalInfo proposal : pendingProposals) {
+                if (proposal != bestProposal) {
+                    ACLMessage reject = proposal.message.createReply();
+                    reject.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                    reject.setContent("DELIVERY_REJECTED:" + store.getStoreId() + ":CHEAPER_OFFER_SELECTED");
+                    send(reject);
+                    System.out.println("[" + getLocalName() + "] → Отклонено предложение от " + proposal.truckId + 
+                            " (стоимость: " + proposal.cost + ") - выбрано более дешевое предложение");
+                }
+            }
+            
+            // Очищаем список предложений
+            pendingProposals.clear();
         }
 
         @Override
