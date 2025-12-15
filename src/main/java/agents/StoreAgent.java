@@ -582,16 +582,35 @@ public class StoreAgent extends Agent {
         ACLMessage accept = bestProposal.message.createReply();
         accept.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
         // Формат: DELIVERY_ACCEPTED:storeId:productId1:qty1:productId2:qty2:...
+        // Берем только те позиции и количества, которые реально предложил грузовик (поддержка частичных доставок)
         StringBuilder content = new StringBuilder("DELIVERY_ACCEPTED:" + store.getStoreId());
         int pendingCount = 0;
         Map<String, Integer> newOrdered = new HashMap<>(); // Товары, которые мы сейчас заказываем
+
+        // Парсим предложение: OFFER:storeId:prod:qty:...:cost=...
+        String[] parts = bestProposal.message.getContent().split(":");
+        Map<String, Integer> offered = new HashMap<>();
+        for (int i = 2; i < parts.length; i += 2) {
+            if (parts[i].contains("=")) break; // дошли до блока cost/времени
+            if (i + 1 >= parts.length) break;
+            String productId = parts[i];
+            try {
+                int qty = Integer.parseInt(parts[i + 1]);
+                offered.put(productId, qty);
+            } catch (NumberFormatException ignored) {
+                // пропускаем некорректные записи
+            }
+        }
+
         for (DeliveryRequest req : demands) {
             int delivered = deliveredProducts.getOrDefault(req.getProductId(), 0);
             int ordered = orderedProducts.getOrDefault(req.getProductId(), 0);
             int remaining = req.getQuantity() - delivered - ordered; // Учитываем и доставленные, и заказанные
-            if (remaining > 0) {
-                content.append(":").append(req.getProductId()).append(":").append(remaining);
-                newOrdered.put(req.getProductId(), remaining); // Запоминаем, что заказываем
+            int offeredQty = offered.getOrDefault(req.getProductId(), 0);
+            int toOrder = Math.min(remaining, offeredQty);
+            if (toOrder > 0) {
+                content.append(":").append(req.getProductId()).append(":").append(toOrder);
+                newOrdered.put(req.getProductId(), toOrder); // Запоминаем, что заказываем
                 pendingCount++;
             }
         }

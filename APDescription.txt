@@ -1,1 +1,1 @@
-( ap-description  :name "DeliveryPlatform" :ap-services (set ( ap-service  :name fipa.mts.mtp.http.std :type fipa.mts.mtp.http.std :addresses (sequence http://host.docker.internal:7778/acc))))
+( ap-description  :name "DeliveryPlatform" :ap-services (set ( ap-service  :name fipa.mts.mtp.http.std :type fipa.mts.mtp.http.std :addresses (sequence http://LAPTOP-2CRMNSFN:7778/acc))))

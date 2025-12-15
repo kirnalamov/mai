@@ -232,14 +232,12 @@ public class RoutePlanningEngine {
             String storeId = entry.getKey();
             Store store = storesMap.get(storeId);
 
-            // Проверяем, есть ли место для товаров
-            double requiredLoad = 0;
-            for (DeliveryRequest req : entry.getValue()) {
-                requiredLoad += req.getTotalWeight();
-            }
-
-            if (currentLoad + requiredLoad > capacity) {
-                continue;  // Нет места в грузовике
+            // Проверяем, поместится ли хотя бы один заказ (частичные доставки допускаются)
+            double remainingCapacity = capacity - currentLoad;
+            boolean hasFittableRequest = entry.getValue().stream()
+                    .anyMatch(req -> req.getTotalWeight() <= remainingCapacity);
+            if (!hasFittableRequest) {
+                continue;  // Ничего не помещается в текущий грузовик
             }
 
             double distance = DistanceCalculator.calculateDistance(
@@ -271,14 +269,12 @@ public class RoutePlanningEngine {
             String storeId = entry.getKey();
             Store store = storesMap.get(storeId);
 
-            // Проверяем, есть ли место для товаров
-            double requiredLoad = 0;
-            for (DeliveryRequest req : entry.getValue()) {
-                requiredLoad += req.getTotalWeight();
-            }
-
-            if (currentLoad + requiredLoad > capacity) {
-                continue;  // Нет места в грузовике
+            // Проверяем, поместится ли хотя бы один заказ (частичные доставки допускаются)
+            double remainingCapacity = capacity - currentLoad;
+            boolean hasFittableRequest = entry.getValue().stream()
+                    .anyMatch(req -> req.getTotalWeight() <= remainingCapacity);
+            if (!hasFittableRequest) {
+                continue;  // Ничего не помещается в текущий грузовик
             }
 
             double distance = DistanceCalculator.calculateDistance(

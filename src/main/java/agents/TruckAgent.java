@@ -215,13 +215,43 @@ public class TruckAgent extends Agent {
                 return;
             }
 
-            // Проверяем грузоподъёмность для всех товаров вместе (учитывая текущую загрузку)
-            if (!truck.hasCapacity(totalWeight)) {
+            // Пытаемся подобрать подмножество товаров, которое помещается (частичная доставка)
+            double remainingCapacity = truck.getCapacity() - truck.getCurrentLoad();
+            List<String> acceptedProducts = new ArrayList<>();
+            List<Integer> acceptedQty = new ArrayList<>();
+            double acceptedWeight = 0;
+            int acceptedTotalQty = 0;
+
+            for (int i = 0; i < productIds.size(); i++) {
+                String productId = productIds.get(i);
+                int qty = quantities.get(i);
+                Product product = products.get(productId);
+                double unitWeight = (product != null) ? product.getUnitWeight() : 1.0;
+                double fullWeight = qty * unitWeight;
+
+                if (acceptedWeight + fullWeight <= remainingCapacity) {
+                    acceptedProducts.add(productId);
+                    acceptedQty.add(qty);
+                    acceptedWeight += fullWeight;
+                    acceptedTotalQty += qty;
+                } else {
+                    // берём частично, если влезает хотя бы 1 единица
+                    int fitQty = (int) Math.floor((remainingCapacity - acceptedWeight) / unitWeight);
+                    if (fitQty > 0) {
+                        acceptedProducts.add(productId);
+                        acceptedQty.add(fitQty);
+                        acceptedWeight += fitQty * unitWeight;
+                        acceptedTotalQty += fitQty;
+                    }
+                }
+            }
+
+            if (acceptedProducts.isEmpty()) {
                 ACLMessage reply = msg.createReply();
                 reply.setPerformative(ACLMessage.REFUSE);
                 reply.setContent("NO_CAPACITY");
                 send(reply);
-                System.out.println("[" + getLocalName() + "] → Отказ: нет грузоподъёмности (текущая загрузка: " + 
+                System.out.println("[" + getLocalName() + "] → Отказ: нет грузоподъёмности (текущая загрузка: " +
                         truck.getCurrentLoad() + ", требуется: " + totalWeight + ", вместимость: " + truck.getCapacity() + ")");
                 return;
             }
@@ -347,8 +377,8 @@ public class TruckAgent extends Agent {
             );
             // Формат: OFFER:storeId:productId1:qty1:productId2:qty2:...:cost=...:departure=...:arrival=...:departureFromStore=...
             StringBuilder offerContent = new StringBuilder("OFFER:" + storeId);
-            for (int i = 0; i < productIds.size(); i++) {
-                offerContent.append(":").append(productIds.get(i)).append(":").append(quantities.get(i));
+            for (int i = 0; i < acceptedProducts.size(); i++) {
+                offerContent.append(":").append(acceptedProducts.get(i)).append(":").append(acceptedQty.get(i));
             }
             offerContent.append(":cost=").append(estimatedCost)
                        .append(":departure=").append(plannedStart)
