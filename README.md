@@ -416,11 +416,10 @@ netstat -an | grep 1099
 - [Vehicle Routing Problem (VRP)](https://en.wikipedia.org/wiki/Vehicle_routing_problem)
 
 ## Лицензия
+Copyright (c) 2025 kir_nalamov
 
-Учебный проект. Использование в образовательных целях.
+All rights reserved.
 
----
+No part of this repository may be copied, modified, or distributed
+without explicit written permission from the author.
 
-**Автор:** Multiagent Systems Team  
-**Дата:** 2025  
-**Версия:** 1.0
